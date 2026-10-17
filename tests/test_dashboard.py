@@ -1,6 +1,8 @@
 import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from dataclasses import replace
 from unittest.mock import patch
 
 import streamlit as st
@@ -8,6 +10,7 @@ from streamlit.testing.v1 import AppTest
 
 from smart_home_energy.models import Telemetry
 from smart_home_energy.store import TelemetryStore
+from smart_home_energy.config import HemsSettings
 
 DASHBOARD = Path(__file__).resolve().parents[1] / "src/smart_home_energy/dashboard.py"
 
@@ -15,6 +18,9 @@ DASHBOARD = Path(__file__).resolve().parents[1] / "src/smart_home_energy/dashboa
 class DashboardTests(unittest.TestCase):
     def setUp(self) -> None:
         st.cache_resource.clear()
+        directory = Path(self.enterContext(TemporaryDirectory()))
+        hems = replace(HemsSettings.from_env(), database=str(directory / "control.db"), device_database=str(directory / "washer.db"))
+        self.enterContext(patch("smart_home_energy.hems_ui.HemsSettings.from_env", return_value=hems))
 
     def tearDown(self) -> None:
         st.cache_resource.clear()

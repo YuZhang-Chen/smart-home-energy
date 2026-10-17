@@ -1,6 +1,18 @@
-# 智慧家庭能源監測 PoC
+# 智慧家庭能源監測與洗衣 Main Agent
 
-單台電腦、零硬體成本的第一個里程碑：模擬一台冷氣，每兩秒透過 MQTT 發送資料，並在 Streamlit 即時顯示室溫、功率、累積用電與功率曲線。
+單台電腦、零硬體成本：保留每兩秒更新的冷氣監測，新增虛擬洗衣機、SQLite 任務、計畫核准、常駐控制服務與事件驅動 Main Agent。Azure OpenAI 主用、vLLM 備援；沒有模型時可由表單計算排程。所有設備與電價均為教學模擬。
+
+安裝依賴後，可在專案根目錄一次啟動四個背景程序（需要已啟動的 Docker Desktop）：
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e .
+.\scripts\start.ps1
+# 開啟 http://127.0.0.1:8501，選擇「洗衣與 Main Agent」
+# 完成展示後：
+.\scripts\stop.ps1 -StopBroker
+```
+
+背景日誌位於 `artifacts/runtime/`。停止腳本保留 SQLite，運轉途中停止設備程序會在下次啟動回報故障。洗衣任務取消、中止及人工解除請先在畫面操作。詳細流程見 [洗衣操作指南](docs/MAIN_AGENT_GUIDE.md)，測試範圍見 [Main Agent 驗收紀錄](docs/MAIN_AGENT_VALIDATION.md)。
 
 ## 啟動
 
@@ -29,7 +41,17 @@ docker compose logs -f mosquitto
 .\.venv\Scripts\python.exe -m smart_home_energy.publisher
 ```
 
-**視窗三：啟動儀表板。**
+**另開兩個視窗：啟動虛擬洗衣機與控制服務。** 僅需冷氣監測時可略過。
+
+```powershell
+.\.venv\Scripts\python.exe -m smart_home_energy.washer
+```
+
+```powershell
+.\.venv\Scripts\python.exe -m smart_home_energy.control
+```
+
+**最後一個視窗：啟動儀表板。**
 
 ```powershell
 .\.venv\Scripts\python.exe -m streamlit run src\smart_home_energy\dashboard.py --server.address 127.0.0.1 --browser.gatherUsageStats false
@@ -43,7 +65,7 @@ docker compose logs -f mosquitto
 docker compose exec mosquitto mosquitto_sub -h 127.0.0.1 -t home/energy/ac -v
 ```
 
-停止時，在模擬器與 Streamlit 視窗各按 `Ctrl+C`，接著執行 `docker compose down`。Broker 日誌視窗的 `Ctrl+C` 只會停止查看日誌。
+停止時，在各程序視窗按 `Ctrl+C`，接著執行 `docker compose down`。Broker 日誌視窗的 `Ctrl+C` 只會停止查看日誌。關閉瀏覽器本身不會停止洗衣排程。
 
 ## 程式結構
 
@@ -56,6 +78,13 @@ src/smart_home_energy/
   mqtt_transport.py  Paho 連線、訂閱、重連及訊息入口
   store.py           執行緒安全的最新資料與有界歷史紀錄
   dashboard.py       Streamlit 畫面與定期刷新
+  domain.py          洗衣行程、共享邏輯時鐘、模擬費率及確定性排程
+  repository.py      SQLite 交易、版本、核准、請求、事件與工具紀錄
+  washer.py          虛擬洗衣設備、MQTT 命令去重及自主運轉
+  control.py         背景排程、命令確認、狀態核對與恢復
+  agent.py           Main Agent JSON 工具迴圈、Azure／vLLM 與預算
+  hems_ui.py         自然語言／表單、核准、取消／中止及紀錄
+  service_lock.py    防止同一資料庫啟動重複服務
 mosquitto/           Broker 設定
 tests/              運算、資料、傳輸、畫面與真實 Broker 驗收
 ```
@@ -147,4 +176,10 @@ Compose 的主機連接埠固定為 1883；若更換本機連接埠，也要同�
 
 本次開發的測試環境、實測間隔及畫面核對結果，請見 [PoC 驗收紀錄](docs/VALIDATION.md)。
 
-本里程碑只包含監測；Matter、設備控制、LLM、電費與資料庫將於後續加入。
+後續洗衣排程採用的模擬電價與實際電價擴充需求，追蹤於 [電價功能擴充紀錄](docs/TARIFF_ROADMAP.md)。
+
+Agent 與排程的已確認方向，以及預留的 Azure OpenAI 設定，請見 [整合決策紀錄](docs/INTEGRATION_DECISIONS.md)。
+
+首版規格與驗收清單，請見 [Main Agent 實作計畫](docs/IMPLEMENTATION_PLAN.md)。
+
+首版已實作 MQTT 虛擬洗衣控制、Main Agent、模擬費用與 SQLite。Matter、冷氣自動控制、實際電價及 Sub Agents 為後續工作。真實 Azure／vLLM 需填妥 `.env` 後另行驗證，目前驗收使用假模型。

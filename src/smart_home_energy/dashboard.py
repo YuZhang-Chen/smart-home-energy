@@ -62,7 +62,7 @@ def render_monitor(subscriber: TelemetryClient) -> None:
 def main() -> None:
     st.set_page_config(page_title="智慧家庭能源監測", page_icon="⚡", layout="wide")
     st.title("智慧家庭能源監測")
-    st.caption("第一個 PoC · Python 冷氣模擬 → MQTT → Streamlit")
+    st.caption("冷氣即時監測 · 洗衣排程、核准與執行查核")
     st.info(
         "教學用模擬模型：冷氣持續開啟，目標 27°C，功率範圍 100–1,200 W。"
         "數據不代表實際家電；累積用電自模擬器本次啟動起計算。"
@@ -73,7 +73,12 @@ def main() -> None:
         st.error(f"設定錯誤：{error}")
         st.stop()
     st.caption(f"Broker：{settings.mqtt_host}:{settings.mqtt_port} · Topic：{settings.mqtt_topic}")
-    render_monitor(get_subscriber(settings))
+    ac_tab, washer_tab = st.tabs(["冷氣監測", "洗衣與 Main Agent"])
+    with ac_tab:
+        render_monitor(get_subscriber(settings))
+    with washer_tab:
+        from smart_home_energy.hems_ui import render_washer
+        render_washer()
 
 
 if __name__ == "__main__":
