@@ -8,3 +8,4 @@ dist/
 .env
 artifacts/
 node_modules/
+*.tsbuildinfo

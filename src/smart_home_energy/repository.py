@@ -164,6 +164,16 @@ class Repository:
         with self.transaction() as db:
             return [json.loads(r[0]) for r in db.execute("SELECT data FROM tasks ORDER BY rowid DESC LIMIT 20")]
 
+    def latest_task(self, device_id: str) -> Task | None:
+        with self.transaction() as db:
+            row = db.execute("SELECT data FROM tasks WHERE device_id=? ORDER BY rowid DESC LIMIT 1", (device_id,)).fetchone()
+            return decode(Task, json.loads(row[0])) if row else None
+
+    def request(self, request_id: str) -> dict | None:
+        with self.transaction() as db:
+            row = db.execute("SELECT id,kind,payload,status,result,created FROM requests WHERE id=?", (request_id,)).fetchone()
+            return dict(row) if row else None
+
     def create_task(self, constraints: TaskConstraints | None, program: WashProgram, tariff: Tariff,
                     message: str = "") -> Task:
         with self.transaction() as db:
