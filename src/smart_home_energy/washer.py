@@ -37,7 +37,7 @@ class DeviceCommand:
 
     def __post_init__(self):
         aware(self.expires_at)
-        if self.protocol_version != 1 or self.device_id != "washer-1" or self.action not in {"start", "stop", "query", "reset"}:
+        if self.protocol_version != 1 or self.device_id not in {"washer-1", "ac-1"} or self.action not in {"start", "stop", "query", "reset"}:
             raise ValueError("不支援的命令協議、設備或動作")
         if not self.command_id or not self.clock_id or not self.expected_boot or type(self.plan_version) is not int or self.plan_version < 0:
             raise ValueError("命令識別碼／版本不合法")
@@ -53,7 +53,7 @@ class CommandResult:
     protocol_version: int = 1
 
     def __post_init__(self):
-        if self.protocol_version != 1 or self.device_id != "washer-1" or type(self.accepted) is not bool:
+        if self.protocol_version != 1 or self.device_id not in {"washer-1", "ac-1"} or type(self.accepted) is not bool:
             raise ValueError("不支援的結果訊息")
 
 
@@ -81,7 +81,7 @@ class DeviceState:
     def __post_init__(self):
         aware(self.observed_at)
         aware(self.logical_at)
-        if self.protocol_version != 1 or self.device_id != "washer-1" or not self.boot_id or not self.clock_id:
+        if self.protocol_version != 1 or self.device_id not in {"washer-1", "ac-1"} or not self.boot_id or not self.clock_id:
             raise ValueError("不支援的狀態協議或設備")
         if type(self.sequence) is not int or self.sequence < 0 or type(self.plan_version) is not int or self.plan_version < 0:
             raise ValueError("狀態序號／版本不合法")
@@ -138,6 +138,8 @@ class Washer:
                 return decode(CommandResult, previous)
             self.tick(real)
             try:
+                if command.device_id != "washer-1":
+                    raise ValueError("設備識別碼不符")
                 if command.expires_at <= real:
                     raise ValueError("命令已過期")
                 if command.clock_id != self.clock.clock_id or command.expected_boot != self.boot_id:
@@ -179,7 +181,8 @@ class Washer:
 
 class WasherTransport:
     """Callbacks only validate and enqueue messages. No model calls or control logic."""
-    def __init__(self, settings: Settings, root: str, role: str):
+    def __init__(self, settings: Settings, root: str, role: str, device_id: str = "washer-1"):
+        self.device_id = device_id
         if role not in {"device", "control"}:
             raise ValueError("未知 MQTT 角色")
         self.root, self.role = root, role
@@ -199,7 +202,7 @@ class WasherTransport:
         if reason_code == 0:
             topics = ["command"] if self.role == "device" else ["state", "result"]
             for topic in topics:
-                client.subscribe(f"{self.root}/devices/washer-1/{topic}", qos=0 if topic == "state" else 1)
+                client.subscribe(f"{self.root}/devices/{self.device_id}/{topic}", qos=0 if topic == "state" else 1)
 
     def _message(self, client, userdata, message):
         kind = message.topic.rsplit("/", 1)[-1]
@@ -207,10 +210,15 @@ class WasherTransport:
             if len(message.payload) > 65536 or (kind == "command" and message.retain):
                 raise ValueError("訊息過大或 retained 命令")
             cls = {"command": DeviceCommand, "state": DeviceState, "result": CommandResult}[kind]
+            if self.device_id == "ac-1":
+                from smart_home_energy.ac import ACCommand, ACState
+                cls = {"command": ACCommand, "state": ACState, "result": CommandResult}[kind]
             data = json.loads(message.payload)
             if not isinstance(data, dict) or set(data) != {f.name for f in fields(cls)}:
                 raise ValueError("MQTT 訊息必須包含完整協議欄位")
             item = decode(cls, data)
+            if item.device_id != self.device_id:
+                raise ValueError("設備識別碼不符")
             self.messages.put_nowait((kind, item))
         except (ValueError, TypeError, KeyError, OverflowError, RecursionError) as error:
             logger.warning("Ignored invalid washer message: %s", error)
@@ -220,7 +228,9 @@ class WasherTransport:
     def publish(self, kind: str, item) -> bool:
         if not self.connected:
             return False
-        result = self.client.publish(f"{self.root}/devices/washer-1/{kind}", json.dumps(encode(item), allow_nan=False),
+        if item.device_id != self.device_id:
+            raise ValueError("設備識別碼不符")
+        result = self.client.publish(f"{self.root}/devices/{self.device_id}/{kind}", json.dumps(encode(item), allow_nan=False),
                                      qos=0 if kind == "state" else 1, retain=kind == "state")
         return result.rc == mqtt.MQTT_ERR_SUCCESS
 

@@ -2,24 +2,28 @@
 
 日期：2026-10-17（Asia/Taipei）。環境：Windows、Python 3.12.13、OpenAI Python SDK 2.54.0、Docker Mosquitto 2、Streamlit。
 
+以下是首版驗收當時的歷史結果。第二階段已增加 Sub Agents、冷氣控制、正式費率與真實 Matter，並實際以 vLLM 完成雙設備提案；使用者另回報連線測試成功。最新測試數、證據及未涵蓋項目以 [PHASE2_VALIDATION.md](PHASE2_VALIDATION.md) 為準。
+
 ## 結果
 
-首版程式已完成。**46 項 unittest／AppTest 全數通過**（最後一次約 7.51 秒），`compileall` 與 `pip check` 通過。真實 Mosquitto 的洗衣與冷氣復原測試均通過，PowerShell 啟停腳本已實際啟動及清理四個程序。
+首版程式已完成。模型優先順序調整後重新執行 unittest／AppTest，共 48 項：**46 項通過、2 項真實模型連線測試略過**（約 9.35 秒），`compileall` 通過。首版驗收另已通過 `pip check`、真實 Mosquitto 的洗衣與冷氣復原測試，PowerShell 啟停腳本已實際啟動及清理四個程序。
 
 | 驗證層 | 已驗證範圍 | 結果 |
 | --- | --- | --- |
 | 純領域 | 60 分鐘／0.225 kWh、大步長跨階段、跨電價邊界、跨夜、安靜時段、無解、UTC 編解碼、60 倍物理結果 | 通過 |
 | SQLite | 一個未完成任務、失敗仍佔名額、版本衝突、核准恢復、範圍內改排／超範圍重新核准、UI 去重、事件合併 | 通過 |
 | 控制與設備 | 未核准拒絕啟動、過期／錯誤時鐘／boot／費用上限、重複命令、5 秒逾時後查詢、識別碼核對、人工中止、重啟故障 | 通過 |
-| 假模型 Main Agent | 多輪工具與結果回饋、提案不會自行核准、工具白名單、Azure 故障後沿用 vLLM 並保留上下文、格式修復、15 次與 120／20 秒預算、補問、雙服務失敗後表單可用 | 通過 |
-| 官方 SDK + 隔離 HTTP | Azure `/openai/v1/chat/completions`、部署名稱、vLLM served name、429 備援、`max_retries=0`、不記錄 Key | 通過；使用 httpx MockTransport，沒有外部請求 |
+| 假模型 Main Agent | 多輪工具與結果回饋、提案不會自行核准、工具白名單、vLLM 故障或逾時後沿用 Azure 並保留上下文、格式修復、15 次與 120／20 秒預算、補問、雙服務失敗後表單可用 | 通過 |
+| 官方 SDK + 隔離 HTTP | vLLM 正常時不呼叫 Azure；連線失敗、空白回覆、429 或 503 才切至 Azure；Azure `/openai/v1/chat/completions`、部署名稱、vLLM served name、`max_retries=0`、不記錄 Key | 通過；使用 httpx MockTransport，沒有外部請求 |
 | Streamlit AppTest | 保留冷氣監測；表單→待核准→核准→取消、重繪不重複提交、不建立執行器、不自動呼叫模型 | 通過 |
 | 實際瀏覽器 | 本機頁面、洗衣狀態、表單提案、完整核准範圍、核准、取消與歷史保存 | 通過；驗收任務已取消 |
-| 真實 Azure／vLLM | 外部端點、帳號權限、實際部署／served model 的回覆品質 | **未測試**；由使用者填妥 `.env` 後另行驗證 |
+| 真實 Azure／vLLM | 首版驗收當時的外部端點與實際回覆品質 | 當時未測試；後續使用者回報及本次 vLLM 實測另見第二階段紀錄 |
 
 主測試指令：
 
 ```powershell
+$env:RUN_LLM_CONNECT_TESTS = '0'
+$env:LLM_CONNECT_PROMPT = 'Reply with OK only.'
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 .\.venv\Scripts\python.exe -m compileall -q src tests
 .\.venv\Scripts\python.exe -m pip check
@@ -57,7 +61,7 @@
 
 ## 已知邊界
 
-- Azure／vLLM 實際連線尚未驗證，不能據此宣稱服務整合已實測通過。
-- 本版只做單機虛擬設備與模擬電價；Matter、冷氣控制、正式電費及 Sub Agents 不在此版交付。
+- 首版當時沒有真實模型證據；後續實測已另記，不能把假模型測試視為實際 Azure 備援驗收。
+- 首版當時只包含虛擬洗衣與模擬電價；第二階段已擴充，完整帳單與硬體家電仍未涵蓋。
 - 開始命令有傳輸延遲，實際起訖會再次驗證；貼齊期限或安靜時段邊界的計畫可能需要改排，不能放寬核准限制。
 - SQLite 與設備本機狀態保留最後已確認資料，設備程序停機期間不補算完成。UI 關閉不影響背景服務；全部服務停止則需要依恢復規則處理。

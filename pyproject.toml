@@ -17,3 +17,9 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[project.optional-dependencies]
+calendar = ["pdfplumber>=0.11,<1"]
+
+[tool.setuptools.package-data]
+smart_home_energy = ["data/*.json"]

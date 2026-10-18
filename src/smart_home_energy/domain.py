@@ -110,6 +110,7 @@ class Tariff:
     peak_end: int = 22 * 60
     peak: float = 6.0
     offpeak: float = 2.5
+    official: dict | None = None
 
     def __post_init__(self) -> None:
         if not self.version or not 0 <= self.peak_start < self.peak_end <= 1440:
@@ -118,11 +119,16 @@ class Tariff:
         number(self.offpeak, "離峰費率")
 
     def rate(self, at: datetime) -> float:
+        if self.official is not None:
+            from smart_home_energy.tariffs import time_rate
+            return time_rate(self.official, at)
         local = aware(at).astimezone(TAIPEI)
         minute = local.hour * 60 + local.minute
         return self.peak if self.peak_start <= minute < self.peak_end else self.offpeak
 
     def cost(self, start: datetime, seconds: float, power_w: float) -> float:
+        if self.official is not None:
+            return self.segment_cost([(start, seconds, power_w)])
         number(seconds, "秒數")
         number(power_w, "功率")
         cursor = aware(start)
@@ -137,6 +143,12 @@ class Tariff:
             total += power_w * (stop - cursor).total_seconds() / 3_600_000 * self.rate(cursor)
             cursor = stop
         return total
+
+    def segment_cost(self, segments) -> float:
+        if self.official is not None:
+            from smart_home_energy.tariffs import estimate_incremental_cost
+            return estimate_incremental_cost(self.official, segments)
+        return sum(self.cost(start, seconds, power) for start, seconds, power in segments)
 
 
 @dataclass(frozen=True)
@@ -222,14 +234,15 @@ def integrate(program: WashProgram, start: datetime, elapsed: float, tariff: Tar
     number(elapsed, "經過秒數")
     energy = cost = offset = 0.0
     stage_name, power = "完成", 0.0
+    segments = []
     for stage in program.stages:
         used = min(stage.seconds, max(0, elapsed - offset))
         energy += used * stage.power_w / 3_600_000
-        cost += tariff.cost(start + timedelta(seconds=offset), used, stage.power_w)
+        segments.append((start + timedelta(seconds=offset), used, stage.power_w))
         if offset <= elapsed < offset + stage.seconds:
             stage_name, power = stage.name, stage.power_w
         offset += stage.seconds
-    return energy, cost, stage_name, power
+    return energy, tariff.segment_cost(segments), stage_name, power
 
 
 def quiet_conflict(start: datetime, end: datetime, constraints: TaskConstraints) -> bool:
@@ -273,7 +286,7 @@ def validate_plan(plan: Plan, constraints: TaskConstraints, now: datetime, clock
 
 
 def find_schedule(constraints: TaskConstraints, program: WashProgram, tariff: Tariff,
-                  now: datetime, clock_id: str, max_cost: float | None = None) -> Plan:
+                  now: datetime, clock_id: str, max_cost: float | None = None, prefer_earliest: bool = False) -> Plan:
     earliest = max(aware(now), aware(constraints.earliest))
     start = earliest.replace(second=0, microsecond=0)
     if start < earliest:
@@ -284,6 +297,8 @@ def find_schedule(constraints: TaskConstraints, program: WashProgram, tariff: Ta
             candidate = make_plan(start, program, tariff, clock_id)
             if (max_cost is None or candidate.cost <= max_cost + 1e-12) and (best is None or candidate.cost < best.cost - 1e-12):
                 best = candidate
+                if prefer_earliest:
+                    return best
         start += timedelta(minutes=1)
     if best is None:
         raise ValueError("沒有合法候選：完整行程、期限、安靜時段或費用上限衝突；請調整限制")

@@ -2,11 +2,13 @@
 
 更新：2026-10-17（Asia/Taipei）。
 
+目前主畫面已改為家庭助理，同頁確認與追蹤，先看 [家庭助理操作](ASSISTANT_UI.md)。本文件保留洗衣手動操作細節，入口在「洗衣機」的「手動設定洗衣」；費率、時間倍率已移到左側進階設定。
+
 ## 啟動與設定
 
 使用 Python 3.12+，安裝 `pip install -e .`。保留既有 `.env`；新環境從 `.env.example` 複製。新增設定可由範本補入，未補入時使用首版教學預設值。原有 MQTT 三個設定仍為必要值。
 
-在根目錄執行 `scripts/start.ps1`，啟動 Broker、冷氣 publisher、washer、control 與 Streamlit。已自行啟動 Broker 時可用 `-NoBroker`。也可依 README 分別啟動各程序。服務按各自資料庫加 OS 鎖，避免重複控制器或設備程序。
+在根目錄執行 `scripts/start.ps1`，啟動 Broker、可控冷氣 ac、washer、control 與 Streamlit。已自行啟動 Broker 時可用 `-NoBroker`；真實 Matter 使用 `-Transport matter` 並先安裝 Node 依賴。也可依 README 分別啟動 MQTT 模式各程序。服務按各自資料庫加 OS 鎖，避免重複控制器或設備程序。
 
 `HEMS_DB` 預設 `artifacts/hems.sqlite3`，保存 UI 請求、任務／計畫版本、核准、命令、設備回報、事件及工具紀錄。設備的去重結果及行程另外存於 `HEMS_DEVICE_DB=artifacts/washer.sqlite3`。兩個檔案不要設定成同一路徑；備份時先停止程序並連同 WAL 檔案處理。不要以刪除資料庫作為解除運轉中未知狀態的方法。
 
@@ -14,8 +16,8 @@
 
 ## 建立、核准與操作
 
-1. 開啟 [儀表板](http://127.0.0.1:8501)，選「洗衣與 Main Agent」。確認控制服務心跳、洗衣機資料皆正常。
-2. 沒有未完成任務時，可在「時間模式」切換真實時間或 60 倍展示。模式保存在共享時鐘，切換會更換時鐘 ID。
+1. 開啟 [儀表板](http://127.0.0.1:8501)，直接點「安排洗衣」。需要手動調整時，在「洗衣機」展開「手動設定洗衣」。
+2. 沒有未完成任務時，可在左側「偏好與進階設定」切換真實時間或 60 倍展示。模式保存在共享時鐘，切換會更換時鐘 ID。
 3. 輸入自然語言需求；Agent 可查狀態、查費率、搜尋時段、驗證與提出計畫。資訊不足時在紀錄區顯示補問，於相同文字框補充即可。
 4. 未設定模型或模型失敗時，直接展開「表單排程」，填入最早開始、最晚完成的日期與時間，以及每日安靜時段。可取消安靜時段；沒有可行時段會在請求紀錄說明原因。
 5. 檢查待核准計畫的完整日期、行程、期限、禁止時段、模擬費率與預估費用，設定自動改排費用上限，再按「核准此版本計畫」。費用上限預填完整計算值；後端不以畫面四捨五入值判斷。
@@ -41,7 +43,7 @@ UI 所有動作先保存請求，畫面最多約兩秒後看到結果。待處�
 
 Azure 填入 `AZURE_OPENAI_ENDPOINT`、`AZURE_OPENAI_API_KEY`、`AZURE_OPENAI_DEPLOYMENT`。Endpoint 由程式組成 `/openai/v1/`，部署名稱傳入 `model`。vLLM 填入包含 `/v1` 的 `VLLM_BASE_URL` 與 served name `VLLM_MODEL`，`VLLM_API_KEY` 依服務驗證設定填入。未使用的供應者全部留白。
 
-使用官方 OpenAI Python SDK **2.54.0**，Chat Completions 與應用層 JSON 動作協議，不要求 vLLM 原生 tool calling。Azure 連線、逾時、429 或服務錯誤會切至 vLLM，該工作後續沿用備援與工具上下文；設定／授權錯誤會明確顯示。SDK retries 關閉，最多 15 次請求（含備援）、總計 120 秒、單次 20 秒，可透過 `.env` 調低。
+使用官方 OpenAI Python SDK **2.54.0**，Chat Completions 與應用層 JSON 動作協議，不要求 vLLM 原生 tool calling。每次 Agent 工作優先使用 vLLM，只有連線失敗、逾時、429、服務錯誤或空白回覆時才切至 Azure OpenAI；該工作後續沿用備援與工具上下文，下次新工作再優先嘗試 vLLM。設定／授權錯誤會明確顯示。SDK retries 關閉，最多 15 次請求（含備援）、總計 120 秒、單次 20 秒，可透過 `.env` 調低。
 
 只有新需求、補充需求、執行異常與完成事件會觸發模型；單純開啟頁面不呼叫模型。模型失敗不會停止本機執行器。工具沒有核准、停止或 shell 權限，修改任務需指定目前版本。紀錄保存工具輸入／輸出、簡短摘要、供應者與預算，不保存 API Key 或私有推理全文。
 
@@ -53,4 +55,4 @@ Azure 填入 `AZURE_OPENAI_ENDPOINT`、`AZURE_OPENAI_API_KEY`、`AZURE_OPENAI_DE
 - [Azure v1 API 與部署名稱](https://learn.microsoft.com/en-us/azure/foundry/openai/api-version-lifecycle)
 - [vLLM OpenAI 相容伺服器](https://docs.vllm.ai/en/stable/serving/online_serving/openai_compatible_server/)
 
-本次程式自行實作，沒有移植上游原始碼；[agentic-ai-hems 固定版本](https://github.com/RedaElMakroum/agentic-ai-hems/tree/58177f81468d3f1bc9a3a62c157e453924a5598a) 僅作為工具化排程與紀錄的設計參考。Matter、冷氣自動控制、實際電價及 Main Agent 協調 Sub Agents 仍為後續階段。
+首版程式自行實作，沒有移植上游原始碼；[agentic-ai-hems 固定版本](https://github.com/RedaElMakroum/agentic-ai-hems/tree/58177f81468d3f1bc9a3a62c157e453924a5598a) 僅作為設計參考。Matter、可控冷氣、住宅增量費用及 Main 委派子 Agent 已於第二階段加入；完整帳單仍為後續。

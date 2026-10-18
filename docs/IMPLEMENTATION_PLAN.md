@@ -2,13 +2,13 @@
 
 更新日期：2026-10-17（Asia/Taipei）。
 
-**狀態：首版程式已實作，離線／假模型、真實 Mosquitto 與 Streamlit 驗證已完成；真實 Azure／vLLM 留待使用者設定後另驗。結果與限制見 [MAIN_AGENT_VALIDATION.md](MAIN_AGENT_VALIDATION.md)，啟動流程見 [MAIN_AGENT_GUIDE.md](MAIN_AGENT_GUIDE.md)。**
+**目前狀態：第二階段已實作，包含資料遷移、Main 委派子 Agent、可控冷氣、台電三方案增量估算與真實 Matter 橋接。操作與驗收見 [PHASE2_GUIDE.md](PHASE2_GUIDE.md)、[PHASE2_VALIDATION.md](PHASE2_VALIDATION.md)。以下保留首版設計與歷史階段範圍。**
 
 ## 1. 目標、現況與交付範圍
 
 以現有專案為主體，建立能使用工具、觀察執行結果並重新規劃的智慧家庭 Agent。目標是實際應用，不以策略比較、MILP 或節能優越性實驗作為主要交付。
 
-現有基礎已完成冷氣純運算模型、每兩秒 MQTT 遙測、Streamlit 監測、Docker Mosquitto 與 `.env` 載入；先前 22 項測試通過。Azure／vLLM 連線欄位已預留，但尚未實作或測試模型呼叫。
+首版設計時的基礎為冷氣純運算模型、每兩秒 MQTT 遙測、Streamlit 監測、Docker Mosquitto 與 `.env` 載入，當時 22 項測試通過。現在已有 SDK 模型呼叫及多 Agent；本次實際 vLLM 跨設備提案成功，Azure 備援由隔離 HTTP／假模型驗證。
 
 首版交付：
 
@@ -16,11 +16,11 @@
 - 自然語言需求、Main Agent 多輪 ReAct、工具紀錄、可驗證計畫及使用者核准。
 - 到時執行、設備狀態確認、核准限制內改排、人工取消／中止、異常與重啟恢復。
 - 真實時間與 60 倍展示模式、模擬時間電價與用電／費用紀錄。
-- Azure OpenAI 主用、vLLM 備援；兩者不可用時仍可透過表單與確定性排程工具操作。
+- vLLM 主用，故障時才使用 Azure OpenAI 備援；兩者不可用時仍可透過表單與確定性排程工具操作。
 
-最終架構目標是 **Main Agent 協調 Sub Agents**。首版先由單一 Main Agent 使用工具完成全流程；後續增加洗衣、冷氣等 Sub Agents，共用核准、設備狀態與執行服務。
+目前已實作 **Main Agent 協調 Washer / AC Sub Agents**，共用核准、設備狀態與執行服務；以下單一 Main Agent 內容為首版設計歷史。
 
-Matter、冷氣自動控制、實際電價及完整帳單計算為後續階段。實際電價需求持續追蹤於 [TARIFF_ROADMAP.md](TARIFF_ROADMAP.md)。訪談決策見 [INTEGRATION_DECISIONS.md](INTEGRATION_DECISIONS.md)。
+Matter、冷氣控制、三種住宅正式費率增量估算與 Sub Agents 已於第二階段加入；完整帳單仍留待後續。[TARIFF_ROADMAP.md](TARIFF_ROADMAP.md) 與 [INTEGRATION_DECISIONS.md](INTEGRATION_DECISIONS.md) 已記錄目前邊界。
 
 ## 2. 架構與職責
 
@@ -141,7 +141,7 @@ Matter、冷氣自動控制、實際電價及完整帳單計算為後續階段�
 
 - 一次 Agent 工作最多 **15 次模型請求**，包含備援嘗試；總時間最多 **120 個真實秒**；單次最多 **20 個真實秒**，且受剩餘總預算限制。
 - 停用 SDK 隱含重試，讓請求次數與時間可控。
-- Azure 連線失敗、逾時、限流或服務端異常時切至 vLLM；該次工作後續沿用備援，避免每一回合重新等待故障的 Azure。
+- vLLM 連線失敗、逾時、限流、服務端異常或空白回覆時才切至 Azure OpenAI；該次工作後續沿用備援，避免每一回合重新等待故障的 vLLM，下次新工作再優先嘗試 vLLM。
 - 切換保留上下文與已完成的工具結果，不重做有副作用的工具。設定／授權錯誤需明確呈現，不進行無限重試。
 - 兩邊都不可用或耗盡工作預算時，留下失敗原因並提供表單排程；本機執行器繼續處理已核准任務。
 - 記錄事件、工具呼叫、結果、簡短決策摘要、實際供應者、請求次數與耗時；不保存 API Key 或要求展示模型私有推理全文。
@@ -170,7 +170,7 @@ Matter、冷氣自動控制、實際電價及完整帳單計算為後續階段�
 - [x] 真實 Mosquitto 下驗證斷線、逾時後查詢狀態、Broker 重啟與已開始行程持續運轉。
 - [x] 人工中止取得設備確認後記為已中止；真正故障與通訊未知分開處理。
 - [x] SQLite 恢復任務、核准與工具紀錄；設備程序無法證明行程連續時不偽造完成。
-- [x] 以假模型及隔離 SDK HTTP 驗證 Azure 異常後使用 vLLM，保持工具結果；兩者失敗時仍可使用表單，並驗證 15 次／120 秒／20 秒上限。真實模型服務尚未測試。
+- [x] 以假模型及隔離 SDK HTTP 驗證 vLLM 正常時不呼叫 Azure、異常後使用 Azure 並保持工具結果；兩者失敗時表單可用，驗證 15 次／120 秒／20 秒上限。第二階段另以真實 vLLM 完成雙設備提案，Azure 實際故障切換未另行實測。
 - [x] 一小時行程在 60 倍模式約一分鐘完成，用電／費用與真實時間邏輯一致；5 秒確認與資料過期規則保持真實時間。
 - [x] 保留既有冷氣監測、既有 topic、`.env` 行為與回歸測試；以 AppTest 及實際瀏覽器確認畫面。
 

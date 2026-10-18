@@ -60,25 +60,45 @@ def render_monitor(subscriber: TelemetryClient) -> None:
 
 
 def main() -> None:
-    st.set_page_config(page_title="智慧家庭能源監測", page_icon="⚡", layout="wide")
-    st.title("智慧家庭能源監測")
-    st.caption("冷氣即時監測 · 洗衣排程、核准與執行查核")
-    st.info(
-        "教學用模擬模型：冷氣持續開啟，目標 27°C，功率範圍 100–1,200 W。"
-        "數據不代表實際家電；累積用電自模擬器本次啟動起計算。"
-    )
+    st.set_page_config(page_title="家庭助理", page_icon="⚡", layout="wide", initial_sidebar_state="collapsed")
+    st.markdown("""<style>
+    [data-testid="stMainBlockContainer"] { max-width:1100px; padding-top:2rem; }
+    h1 { font-size:2rem !important; letter-spacing:.02em; }
+    h2,h3 { letter-spacing:.01em; }
+    [data-testid="stAppDeployButton"] { display:none; }
+    [data-testid="stChatMessage"] { border-radius:14px; }
+    [data-testid="stBaseButton-primary"] { background:#0f766e; border-color:#0f766e; }
+    [data-testid="stBaseButton-primary"]:hover { background:#115e59; border-color:#115e59; }
+    button:focus-visible { outline:3px solid #0d9488 !important; outline-offset:3px; }
+    [data-baseweb="tab"][aria-selected="true"] { color:#0f766e; }
+    [data-baseweb="tab-highlight"] { background-color:#0f766e; }
+    </style>""", unsafe_allow_html=True)
+    st.title("家庭助理")
     try:
         settings = Settings.from_env()
     except ValueError as error:
         st.error(f"設定錯誤：{error}")
         st.stop()
-    st.caption(f"Broker：{settings.mqtt_host}:{settings.mqtt_port} · Topic：{settings.mqtt_topic}")
-    ac_tab, washer_tab = st.tabs(["冷氣監測", "洗衣與 Main Agent"])
+    from smart_home_energy.assistant_ui import render_assistant
+    from smart_home_energy.home_ui import render_ac, render_energy, render_settings
+    with st.sidebar:
+        st.header("設定")
+        render_settings()
+        st.caption("家電為教學用虛擬設備。費用為估算，並非實際帳單。")
+    render_assistant()
+    st.divider()
+    ac_tab, washer_tab, energy_tab = st.tabs(["冷氣", "洗衣機", "用電紀錄"])
     with ac_tab:
-        render_monitor(get_subscriber(settings))
+        render_ac()
     with washer_tab:
         from smart_home_energy.hems_ui import render_washer
-        render_washer()
+        st.subheader("洗衣機")
+        st.caption("說「幫我洗衣」即可安排；計畫確認與進度會出現在上方。需要自行指定條件時，再展開手動設定。")
+        with st.expander("手動設定洗衣"):
+            render_washer()
+    with energy_tab:
+        render_energy()
+        render_monitor(get_subscriber(settings))
 
 
 if __name__ == "__main__":

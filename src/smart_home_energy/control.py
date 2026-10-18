@@ -14,6 +14,7 @@ from smart_home_energy.domain import (
 )
 from smart_home_energy.repository import Repository
 from smart_home_energy.washer import DeviceCommand, DeviceState, WasherTransport
+from smart_home_energy.device_transport import DeviceTransport
 
 logger = logging.getLogger(__name__)
 
@@ -23,9 +24,10 @@ def fresh(state: DeviceState | None, real: datetime) -> bool:
 
 
 class Controller:
-    def __init__(self, repo: Repository, transport, hems: HemsSettings, real: datetime | None = None,
-                 monotonic=time.monotonic):
+    def __init__(self, repo: Repository, transport: DeviceTransport, hems: HemsSettings, real: datetime | None = None,
+                 monotonic=time.monotonic, device_id="washer-1"):
         self.repo, self.transport, self.hems = repo, transport, hems
+        self.device_id = device_id
         self.started_at = real or utcnow()
         self.monotonic = monotonic
         self.waits: dict[str, tuple[float, DeviceCommand]] = {}
@@ -33,7 +35,7 @@ class Controller:
         self.recovered = False
 
     def state(self) -> DeviceState | None:
-        data = self.repo.device()
+        data = self.repo.device(self.device_id)
         return decode(DeviceState, data) if data else None
 
     def send(self, action: str, task=None, real: datetime | None = None) -> DeviceCommand:
@@ -60,6 +62,8 @@ class Controller:
 
     def ingest(self, real: datetime):
         for kind, item in self.transport.drain():
+            if item.device_id != self.device_id:
+                continue
             if kind == "state":
                 previous = self.state()
                 if item.observed_at > real + timedelta(seconds=2):
@@ -79,7 +83,7 @@ class Controller:
                     self.waits.pop(item.command_id, None)
                 if wait and not item.accepted:
                     self.repo.audit("command_rejected", item)
-                    task = self.repo.active_task()
+                    task = self.repo.active_task(self.device_id)
                     if task and wait[1].task_id == task.task_id and wait[1].action in {"start", "stop"}:
                         self.repo.event("rejected:" + task.task_id, task.task_id, {"reason": item.message})
                 # Acceptance is not completion, and does not change task status.
@@ -89,6 +93,9 @@ class Controller:
             try:
                 with self.repo.transaction():
                     payload = json.loads(request["payload"])
+                    target = self.repo.task(payload["task_id"]).device_id if "task_id" in payload else payload.get("device_id", "ac-1" if request["kind"] == "create_ac_form" else "washer-1")
+                    if target != self.device_id:
+                        continue
                     result = self.handle_request(request["kind"], payload, real)
                     self.repo.finish_request(request["id"], "done", result)
             except (ValueError, TypeError, KeyError, sqlite3.IntegrityError) as error:
@@ -96,13 +103,26 @@ class Controller:
 
     def handle_request(self, kind: str, p: dict, real: datetime) -> str:
         clock = self.repo.clock()
+        if kind == "create_household":
+            identifier = p["root_id"]
+            self.repo.event("household:" + identifier, None, {"root_id": identifier, "text": p["text"]})
+            return "家庭需求已保存，等待 Main Agent 委派"
+        if kind == "tariff_settings":
+            from smart_home_energy.tariffs import configure_tariff
+            configure_tariff(self.repo, p)
+            return "費率與基準已保存；待核准計畫需重新計算"
+        if kind == "assistant_preferences":
+            from smart_home_energy.assistant_defaults import save_preferences
+            save_preferences(self.repo, p)
+            return "常用偏好已儲存，會套用到下一份計畫"
         if kind == "clock":
             self.repo.switch_clock(p["speed"])
             self.recovered = False
             return "時間模式已切換"
         if kind in {"create_form", "create_text"}:
             c = decode(TaskConstraints, p["constraints"]) if kind == "create_form" else None
-            task = self.repo.create_task(c, self.hems.program(), self.hems.tariff(), p.get("text", ""))
+            from smart_home_energy.tariffs import selected_tariff
+            task = self.repo.create_task(c, self.hems.program(), selected_tariff(self.repo, self.hems.tariff()), p.get("text", ""))
             if c:
                 plan = find_schedule(c, task.program, task.tariff, clock.now(real), clock.clock_id)
                 self.repo.propose(task.task_id, task.version, c, plan)
@@ -123,10 +143,13 @@ class Controller:
                 raise ValueError("目前狀態不可補充／改排")
             # A changed requirement suspends the old start immediately, while the
             # original envelope remains available for an in-scope reschedule.
-            task = self.repo.update_task(task.task_id, task.version, message=p["text"], status="needs_details", plan=None)
+            task = self.repo.update_task(task.task_id, task.version, message=p["text"], status="needs_details", plan=None, ac_plan=None)
             self.repo.event(f"requirement:{task.task_id}:{task.version}", task.task_id, {"text": p["text"]})
         elif kind == "schedule_form":
             c = decode(TaskConstraints, p["constraints"])
+            from smart_home_energy.tariffs import selected_tariff
+            if task.status in {"needs_details", "pending"}:
+                task = self.repo.update_task(task.task_id, task.version, tariff=selected_tariff(self.repo, self.hems.tariff(), task.task_id))
             plan = find_schedule(c, task.program, task.tariff, clock.now(real), clock.clock_id)
             self.repo.propose(task.task_id, task.version, c, plan, task.approval is not None, "使用者表單改排")
         elif kind == "abort":
@@ -146,7 +169,7 @@ class Controller:
                 self.repo.set_meta("reset_pending", {"task_id": task.task_id, "command_id": command.command_id})
             elif state.status in {"idle", "completed", "aborted"}:
                 commands = self.repo.records("commands", 100)
-                pending = [decode(DeviceCommand, json.loads(r["data"])) for r in commands]
+                pending = [decode(DeviceCommand, json.loads(r["data"])) for r in commands if json.loads(r["data"])["device_id"] == self.device_id]
                 if any(c.task_id == task.task_id and c.action in {"start", "stop"} and state.observed_at <= c.expires_at for c in pending):
                     raise ValueError("請等待舊命令過期後再次查核設備，避免仍在傳輸中的命令")
                 self.repo.update_task(task.task_id, task.version, status="resolved", message="人工核對設備已停止並解除")
@@ -161,12 +184,16 @@ class Controller:
     def anomaly(self, task, reason: str):
         key = "anomaly:" + task.task_id
         value = {"version": task.version, "reason": reason}
-        if self.repo.meta(key) != value:
+        seen = self.repo.meta(key + ":seen", {})
+        if seen.get(reason) != task.version:
             self.repo.event("execution:" + task.task_id, task.task_id, {"reason": reason})
+            seen[reason] = task.version
+            self.repo.set_meta(key + ":seen", seen)
+        if self.repo.meta(key) != value:
             self.repo.set_meta(key, value)
 
     def reconcile(self, real: datetime):
-        state, task = self.state(), self.repo.active_task()
+        state, task = self.state(), self.repo.active_task(self.device_id)
         clock = self.repo.clock()
         valid = fresh(state, real) and state.observed_at >= self.started_at and state.clock_id == clock.clock_id and self.transport.connected
         if valid:
@@ -179,10 +206,10 @@ class Controller:
                 self.anomaly(task, task.message)
             self.query(real)
             return
-        reset = self.repo.meta("reset_pending")
+        reset = self.repo.meta("reset_pending" if self.device_id == "washer-1" else "reset_pending:ac-1")
         if reset and reset["task_id"] == task.task_id and state.status == "idle" and state.last_command_id == reset["command_id"]:
             self.repo.update_task(task.task_id, task.version, status="resolved", message="設備已確認人工故障解除")
-            self.repo.set_meta("reset_pending", None)
+            self.repo.set_meta("reset_pending" if self.device_id == "washer-1" else "reset_pending:ac-1", None)
             return
         matches = state.task_id == task.task_id and state.run_id == task.run_id and task.run_id is not None
         if task.status in {"starting", "running", "stopping", "unknown"}:
@@ -206,7 +233,7 @@ class Controller:
             self._execute_due(real)
 
     def _execute_due(self, real: datetime):
-        task = self.repo.active_task()
+        task = self.repo.active_task(self.device_id)
         if not task or task.status != "scheduled" or not task.plan or not task.constraints or not task.approval:
             return
         clock = self.repo.clock()
@@ -235,6 +262,7 @@ class Controller:
     def tick(self, real: datetime | None = None):
         real = real or utcnow()
         self.ingest(real)
+        self.repo.set_meta("transport:" + self.device_id, {"connected": self.transport.connected, "kind": type(self.transport).__name__})
         self.process_requests(real)
         self.reconcile(real)
         self.execute_due(real)
@@ -243,7 +271,7 @@ class Controller:
                 del self.waits[command_id]
                 self.repo.audit("confirmation_timeout", command)
                 if command.action in {"start", "stop", "reset"}:
-                    task = self.repo.active_task()
+                    task = self.repo.active_task(self.device_id)
                     if task and task.task_id == command.task_id:
                         if task.status in {"starting", "stopping"}:
                             task = self.repo.update_task(task.task_id, task.version, status="unknown", message="命令逾時；查詢狀態，沒有重送啟動")
@@ -260,22 +288,35 @@ def main():
     with service_lock(hems.database + ".control.lock"):
         repo = Repository(hems.database)
         repo.recover_events()
-        transport = WasherTransport(settings, hems.mqtt_root, "control")
-        controller = Controller(repo, transport, hems)
+        import os
+        from smart_home_energy.ac_control import ACController
+        mode = os.getenv("HEMS_TRANSPORT", "mqtt")
+        if mode not in {"mqtt", "matter"}:
+            raise ValueError("HEMS_TRANSPORT 只支援 mqtt 或 matter")
+        if mode == "matter":
+            from smart_home_energy.matter_transport import MatterHub, MatterTransport
+            hub = MatterHub(repo, settings, hems)
+            transports = [MatterTransport(hub, device) for device in ("washer-1", "ac-1")]
+        else:
+            transports = [WasherTransport(settings, hems.mqtt_root, "control", device) for device in ("washer-1", "ac-1")]
+        controllers = [Controller(repo, transports[0], hems), ACController(repo, transports[1], hems)]
         stopped = threading.Event()
         worker = threading.Thread(target=agent_worker, args=(repo, hems, stopped), daemon=True, name="main-agent")
-        transport.start()
+        for transport in transports:
+            transport.start()
         worker.start()
         try:
             while True:
-                controller.tick()
+                for controller in controllers:
+                    controller.tick()
                 stopped.wait(1)
         except KeyboardInterrupt:
             pass
         finally:
             stopped.set()
             worker.join(timeout=2)
-            transport.stop()
+            for transport in transports:
+                transport.stop()
 
 
 if __name__ == "__main__":

@@ -30,7 +30,8 @@ class DashboardTests(unittest.TestCase):
             client.return_value.store = TelemetryStore()
             app = AppTest.from_file(str(DASHBOARD), default_timeout=15).run()
         self.assertEqual(len(app.exception), 0)
-        self.assertEqual([metric.value for metric in app.metric], ["—", "—", "—"])
+        labels = {"室內溫度 (°C)", "冷氣即時功率 (W)", "本次累積用電 (kWh)"}
+        self.assertEqual([metric.value for metric in app.metric if metric.label in labels], ["—", "—", "—"])
         self.assertTrue(any("等待模擬器" in info.value for info in app.info))
 
     def test_values_staleness_and_single_subscriber_across_reruns(self) -> None:
@@ -46,7 +47,8 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(client.call_count, 1)
             client.return_value.start.assert_called_once()
         self.assertEqual(len(app.exception), 0)
-        self.assertEqual([metric.value for metric in app.metric],
+        labels = {"室內溫度 (°C)", "冷氣即時功率 (W)", "本次累積用電 (kWh)"}
+        self.assertEqual([metric.value for metric in app.metric if metric.label in labels],
                          ["29.75", "925.0", "0.001235"])
         self.assertTrue(any("超過 10 秒" in warning.value for warning in app.warning))
 

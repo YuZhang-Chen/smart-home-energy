@@ -51,7 +51,7 @@ class AgentTools:
         return encode(self.task())
 
     def get_tariff(self):
-        return {"simulated": True, "unit": "NT$/kWh", "timezone": "Asia/Taipei", "tariff": encode(self.task().tariff)}
+        return {"simulated": self.task().tariff.official is None, "unit": "NT$/kWh", "timezone": "Asia/Taipei", "tariff": encode(self.task().tariff)}
 
     def find_schedule(self, constraints: dict | None = None, max_cost: float | None = None):
         task = self.task()
@@ -150,8 +150,8 @@ class SDKProvider:
 def configured_providers() -> list[SDKProvider]:
     providers = []
     for name, keys in (
-        ("azure", ("AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_API_KEY", "AZURE_OPENAI_DEPLOYMENT")),
         ("vllm", ("VLLM_BASE_URL", "VLLM_API_KEY", "VLLM_MODEL")),
+        ("azure", ("AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_API_KEY", "AZURE_OPENAI_DEPLOYMENT")),
     ):
         url, key, model = (os.getenv(k, "").strip() for k in keys)
         if not any((url, key, model)):
@@ -200,7 +200,7 @@ async def run_agent(repo: Repository, event, hems: HemsSettings, providers=None,
     try:
         providers = configured_providers() if providers is None else providers
         if not providers:
-            raise ProviderUnavailable("Azure／vLLM 尚未設定，請使用表單排程")
+            raise ProviderUnavailable("vLLM／Azure OpenAI 尚未設定，請使用表單排程")
         while count < hems.agent_requests:
             remaining = hems.agent_seconds - (monotonic() - started)
             if remaining <= 0:
@@ -258,6 +258,7 @@ def agent_worker(repo: Repository, hems: HemsSettings, stopped):
     while not stopped.is_set():
         event = repo.claim_event()
         if event:
-            asyncio.run(run_agent(repo, event, hems))
+            from smart_home_energy.multi_agent import run_household
+            asyncio.run(run_household(repo, event, hems))
         else:
             stopped.wait(.5)

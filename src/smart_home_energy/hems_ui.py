@@ -22,7 +22,7 @@ def local_date(value: datetime) -> str:
     return value.astimezone(TAIPEI).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def request(repo: Repository, kind: str, payload: dict, task=None):
+def request(repo: Repository, kind: str, payload: dict, task=None, feedback=True):
     if task:
         payload = {**payload, "task_id": task.task_id, "expected_version": task.version}
     token = st.session_state.setdefault("hems_request_token", uuid4().hex)
@@ -31,7 +31,9 @@ def request(repo: Repository, kind: str, payload: dict, task=None):
     try:
         repo.submit(identifier, kind, payload)
         st.session_state["hems_last_request"] = identifier
-        st.success("請求已保存，等待控制服務處理。")
+        if feedback:
+            st.success("已送出，正在處理。")
+        return identifier
     except ValueError as error:
         st.error(str(error))
 
@@ -65,8 +67,8 @@ def schedule_form(repo: Repository, clock, task):
 
 @st.fragment(run_every=2)
 def render_washer():
-    st.subheader("洗衣任務 · Main Agent")
-    st.caption("虛擬洗衣機 · 模擬電價 · 預估費用（NT$），非實際帳單。關閉瀏覽器後，控制服務仍會執行已核准任務。")
+    st.subheader("洗衣手動設定")
+    st.caption("虛擬洗衣機 · 模擬電價或台電正式費率估算（NT$），非實際帳單。關閉瀏覽器後，控制服務仍會執行已核准任務。")
     try:
         hems = HemsSettings.from_env()
         repo = Repository(hems.database)
@@ -89,13 +91,6 @@ def render_washer():
         st.warning("控制服務尚未連線或心跳過期；請在 PowerShell 啟動 smart_home_energy.control。請求會保留於資料庫。")
     else:
         st.success("控制服務執行中")
-    with st.expander("時間模式"):
-        speed = st.selectbox("時間倍率", [1, 60], index=0 if clock.speed == 1 else 1, disabled=task is not None,
-                             format_func=lambda v: "真實時間（1 倍）" if v == 1 else "展示（60 倍）")
-        if st.button("套用時間模式", disabled=task is not None or speed == clock.speed):
-            repo.submit(f"clock:{clock.clock_id}:{speed}", "clock", {"speed": speed})
-            st.success("已提交時間模式變更")
-
     data = repo.device()
     if data:
         state = decode(DeviceState, data)
@@ -108,7 +103,7 @@ def render_washer():
         p, e, c = st.columns(3)
         p.metric("洗衣功率 (W)", f"{state.power_w:.1f}")
         e.metric("洗衣累積用電 (kWh)", f"{state.energy_kwh:.6f}")
-        c.metric("依執行累積模擬費用 (NT$)", f"{state.cost:.6f}")
+        c.metric("依執行累積估算費用 (NT$)", f"{state.cost:.6f}")
         with st.expander("洗衣功率與用電紀錄"):
             samples = [json.loads(r["data"]) for r in reversed(repo.records("samples", 900))]
             matching = [r for r in samples if r["run_id"] == state.run_id and r["boot_id"] == state.boot_id]
@@ -126,7 +121,12 @@ def render_washer():
             plan = task.plan
             st.write(f"計畫：{local_date(plan.start)} → {local_date(plan.end)}（Asia/Taipei）")
             st.write(f"{plan.program.name}行程 · {plan.program.seconds / 60:g} 分鐘 · {plan.energy_kwh:.6f} kWh · 預估 NT${plan.cost:.6f}")
-            st.text(f"模擬電價：08:00–22:00 NT${plan.tariff.peak:g}/kWh；其餘 NT${plan.tariff.offpeak:g}/kWh · {plan.tariff.version}")
+            if plan.tariff.official is None:
+                st.text(f"模擬電價：08:00–22:00 NT${plan.tariff.peak:g}/kWh；其餘 NT${plan.tariff.offpeak:g}/kWh · {plan.tariff.version}")
+            else:
+                st.write(f"台電正式費率下的增量估算 · {plan.tariff.version}；日曆月基準，不含固定基本費")
+                with st.expander("洗衣費率與基準快照"):
+                    st.json({key: value for key, value in plan.tariff.official.items() if key not in {"raw", "calendar"}})
             st.write("行程：" + "、".join(f"{s.name} {s.seconds / 60:g} 分鐘／{s.power_w:g} W" for s in plan.program.stages))
             if task.constraints:
                 c = task.constraints

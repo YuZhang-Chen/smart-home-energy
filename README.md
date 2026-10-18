@@ -1,16 +1,22 @@
-# 智慧家庭能源監測與洗衣 Main Agent
+# 家庭助理與虛擬家電控制
 
-單台電腦、零硬體成本：保留每兩秒更新的冷氣監測，新增虛擬洗衣機、SQLite 任務、計畫核准、常駐控制服務與事件驅動 Main Agent。Azure OpenAI 主用、vLLM 備援；沒有模型時可由表單計算排程。所有設備與電價均為教學模擬。
+首頁直接說「幫我開冷氣，順便安排洗衣」，或點快捷按鈕。助理提出計畫後，在同一張卡確認、查看進度與停止；設備入口為「冷氣」「洗衣機」「用電紀錄」。最短流程見 [家庭助理操作](docs/ASSISTANT_UI.md)。
+
+單台電腦、零硬體成本：Main Agent 委派 Washer / AC Agents，分別提出、核准並執行虛擬洗衣與冷氣計畫。vLLM 主用，故障時才使用 Azure OpenAI 備援；沒有模型時可由表單計算排程。設備為教學模擬，費用可選模擬費率或台電三種住宅方案的增量估算，通訊可選 MQTT 或真實 Matter 橋接。
+
+第二階段操作、費率假設及 Matter 設定見 [操作指南](docs/PHASE2_GUIDE.md)，測試與實際模型／Matter 證據見 [驗收紀錄](docs/PHASE2_VALIDATION.md)。
 
 安裝依賴後，可在專案根目錄一次啟動四個背景程序（需要已啟動的 Docker Desktop）：
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -e .
 .\scripts\start.ps1
-# 開啟 http://127.0.0.1:8501，選擇「洗衣與 Main Agent」
+# 開啟 http://127.0.0.1:8501，輸入需求或點快捷按鈕
 # 完成展示後：
 .\scripts\stop.ps1 -StopBroker
 ```
+
+Matter 模式另需 Node.js 22+，先執行 `npm.cmd ci --prefix matter`，再以 `.\scripts\start.ps1 -Transport matter` 啟動。直接在首頁輸入跨設備需求，洗衣與冷氣各自核准。
 
 背景日誌位於 `artifacts/runtime/`。停止腳本保留 SQLite，運轉途中停止設備程序會在下次啟動回報故障。洗衣任務取消、中止及人工解除請先在畫面操作。詳細流程見 [洗衣操作指南](docs/MAIN_AGENT_GUIDE.md)，測試範圍見 [Main Agent 驗收紀錄](docs/MAIN_AGENT_VALIDATION.md)。
 
@@ -35,10 +41,10 @@ docker compose up -d
 docker compose logs -f mosquitto
 ```
 
-**視窗二：啟動冷氣模擬器。**
+**視窗二：啟動可控冷氣模擬器。** 它同時發布監測資料；請勿再啟動舊 publisher。
 
 ```powershell
-.\.venv\Scripts\python.exe -m smart_home_energy.publisher
+.\.venv\Scripts\python.exe -m smart_home_energy.ac
 ```
 
 **另開兩個視窗：啟動虛擬洗衣機與控制服務。** 僅需冷氣監測時可略過。
@@ -57,7 +63,7 @@ docker compose logs -f mosquitto
 .\.venv\Scripts\python.exe -m streamlit run src\smart_home_energy\dashboard.py --server.address 127.0.0.1 --browser.gatherUsageStats false
 ```
 
-開啟 [http://127.0.0.1:8501](http://127.0.0.1:8501)。預設初始值約為 30°C、1,000 W，之後室溫與功率逐漸下降，累積用電持續增加。網頁每兩秒更新一次，接收與重繪可能相差一個更新週期。
+開啟 [http://127.0.0.1:8501](http://127.0.0.1:8501)。冷氣初始約 30°C、待機 0 W，核准時段內才開機。網頁每兩秒更新一次，接收與重繪可能相差一個更新週期。上述分別啟動的指令為 MQTT 模式；Matter 請使用啟動腳本。
 
 另開視窗可查看原始 MQTT 訊息，不必在 Windows 額外安裝 Mosquitto：
 
@@ -85,6 +91,17 @@ src/smart_home_energy/
   agent.py           Main Agent JSON 工具迴圈、Azure／vLLM 與預算
   hems_ui.py         自然語言／表單、核准、取消／中止及紀錄
   service_lock.py    防止同一資料庫啟動重複服務
+  multi_agent.py     共用預算、批次委派、父子工作與版本去重
+  ac_domain.py       舒適計畫、核准範圍及精確用電積分
+  ac.py              可控冷氣、自主關機、回溫及相容監測
+  ac_control.py      冷氣背景排程、狀態查核及費用提醒
+  tariffs.py         台電住宅級距／時間電價、快照及合併增量費用
+  device_transport.py 共用設備傳輸介面
+  matter_transport.py Node Matter controller 的程序與回饋管理
+  home_ui.py         設備次要入口、手動預約、偏好與費率設定
+  assistant_ui.py    對話、快捷操作、同頁確認與執行卡片
+  assistant_defaults.py 常用偏好與輸入驗證
+matter/             鎖定版本的真實 Matter controller、bridge 與擴充群集
 mosquitto/           Broker 設定
 tests/              運算、資料、傳輸、畫面與真實 Broker 驗收
 ```
@@ -93,7 +110,7 @@ tests/              運算、資料、傳輸、畫面與真實 Broker 驗收
 
 ## 模擬模型與 MQTT 介面
 
-冷氣持續開啟，初始室溫 30°C、目標 27°C：
+舊 `publisher` 的獨立監測模型持續開啟，初始室溫 30°C、目標 27°C：
 
 ```text
 T_next = 27 + (T_previous - 27) × exp(-elapsed_seconds / 600)
@@ -117,7 +134,7 @@ E_next = E_previous + P_previous × elapsed_seconds / 3_600_000  # kWh
 }
 ```
 
-每次模擬器重新啟動，用電量與序號歸零；儀表板依新 `run_id` 清除舊曲線。只同時執行一個模擬器。MQTT 時間戳使用 UTC，網頁顯示 Asia/Taipei。歷史只存在儀表板程序記憶體，最多 900 筆；重新啟動 Streamlit 後從最新保留訊息開始。
+舊 publisher 每次啟動歸零；可控 `ac` 保存狀態，用電為本次任務累積值，重啟產生新 boot ID，運轉中重啟回報故障。可控冷氣以精確積分計算用電、結束自主關機並回溫。只同時執行一個冷氣資料來源。MQTT 時間戳使用 UTC，網頁顯示 Asia/Taipei。監測圖表最多 900 筆，任務與設備歷史另由 SQLite 保存。
 
 MQTT 設定集中於專案根目錄的 `.env`，啟動時透過 `python-dotenv` 載入，程式內不另外設定預設值。
 
@@ -176,7 +193,7 @@ Compose 的主機連接埠固定為 1883；若更換本機連接埠，也要同�
 
 本次開發的測試環境、實測間隔及畫面核對結果，請見 [PoC 驗收紀錄](docs/VALIDATION.md)。
 
-後續洗衣排程採用的模擬電價與實際電價擴充需求，追蹤於 [電價功能擴充紀錄](docs/TARIFF_ROADMAP.md)。
+台電三方案增量費用與尚未支援的完整帳單範圍，見 [電價功能紀錄](docs/TARIFF_ROADMAP.md)。第二階段 MQTT／Matter 復原測試使用獨立測試 Broker，指令見 [驗收紀錄](docs/PHASE2_VALIDATION.md)。
 
 Agent 與排程的已確認方向，以及預留的 Azure OpenAI 設定，請見 [整合決策紀錄](docs/INTEGRATION_DECISIONS.md)。
 
