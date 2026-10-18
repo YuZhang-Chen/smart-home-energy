@@ -212,7 +212,7 @@ const labelPositions: Record<DeviceId, Vec> = {
   "tv-1": [-0.7, 2.4, -2.69],
   "curtain-1": [-3.9, 3.1, -0.35],
   "bulb-1": [-0.55, 3.3, 0.1],
-  "plug-1": [1.35, 0.77, -2.96],
+  "fan-1": [3.05, 1.95, 1.55],
 };
 function LabelTracker({
   id,
@@ -432,14 +432,13 @@ function Furniture() {
         />
         <Plant at={[0.45, 1.8, -0.55]} scale={0.4} />
       </group>
-      <Fan />
     </>
   );
 }
 
 function Fan() {
   return (
-    <group position={[3.05, 0, 1.55]}>
+    <group>
       <Cylinder
         at={[0, 0.08, 0]}
         args={[0.36, 0.4, 0.12, 16]}
@@ -883,30 +882,7 @@ export default function Scene({
               [-0.55, 2.7, 0.1],
               <Lamp on={lightOn} reduced={reduced} />,
             )}
-            {pick(
-              "plug-1",
-              [1.35, 0.37, -2.96],
-              <>
-                <Soft
-                  at={[0, 0, 0]}
-                  size={[0.25, 0.3, 0.045]}
-                  color="#faf6e9"
-                  radius={0.02}
-                />
-                {[-0.045, 0.045].map((x) => (
-                  <Block
-                    key={x}
-                    at={[x, 0.025, 0.027]}
-                    size={[0.017, 0.05, 0.006]}
-                    color="#7f887e"
-                  />
-                ))}
-                <mesh position={[0, -0.065, 0.027]}>
-                  <circleGeometry args={[0.015, 8]} />
-                  <meshBasicMaterial color="#879a77" />
-                </mesh>
-              </>,
-            )}
+            {pick("fan-1", [3.05, 0, 1.55], <Fan />)}
             <mesh
               rotation={[-Math.PI / 2, 0, 0]}
               position={[0, -0.43, 0]}

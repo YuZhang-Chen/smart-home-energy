@@ -1,5 +1,5 @@
 export type LiveId = "ac-1" | "washer-1";
-export type DeviceId = LiveId | "bulb-1" | "tv-1" | "curtain-1" | "plug-1";
+export type DeviceId = LiveId | "bulb-1" | "tv-1" | "curtain-1" | "fan-1";
 export interface SceneDevice {
   id: DeviceId;
   name: string;
@@ -50,10 +50,10 @@ export const devices: SceneDevice[] = [
     capability: "info",
   },
   {
-    id: "plug-1",
-    name: "智慧插座",
-    english: "SMART PLUG",
-    location: "客廳 · 電視櫃右側牆腳",
+    id: "fan-1",
+    name: "電風扇",
+    english: "FAN",
+    location: "客廳 · 右側",
     source: "display",
     capability: "info",
   },

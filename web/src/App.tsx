@@ -6,7 +6,7 @@ import {
   CircleHelp,
   Lightbulb,
   Maximize,
-  Plug,
+  Fan,
   RotateCcw,
   SlidersHorizontal,
   Tv,
@@ -31,7 +31,7 @@ const icons = {
   "bulb-1": Lightbulb,
   "tv-1": Tv,
   "curtain-1": Blinds,
-  "plug-1": Plug,
+  "fan-1": Fan,
 };
 
 export default function App() {

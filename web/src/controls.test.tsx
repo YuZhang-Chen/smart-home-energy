@@ -292,6 +292,9 @@ describe("accessible scene controls", () => {
     await screen.findByLabelText("開始時間");
     const list = screen.getByRole("region", { name: "客廳設備清單" });
     expect(list.querySelectorAll("button")).toHaveLength(6);
+    expect(
+      screen.queryByRole("button", { name: /智慧插座/ }),
+    ).not.toBeInTheDocument();
     const bulb = screen.getByRole("button", { name: /智慧燈泡 燈光已開啟/ });
     bulb.focus();
     await user.keyboard("{Enter}");
@@ -305,13 +308,18 @@ describe("accessible scene controls", () => {
         "false",
       ),
     );
-    for (const name of ["電視", "窗簾", "智慧插座"]) {
+    for (const name of ["電視", "窗簾", "電風扇"]) {
       await user.click(
         screen.getByRole("button", { name: `${name} 資訊展示` }),
       );
       expect(screen.getByRole("heading", { name })).toBeInTheDocument();
       expect(screen.getByText(/尚未串接設備服務/)).toBeInTheDocument();
     }
+    expect(screen.getByText("FAN")).toBeInTheDocument();
+    expect(screen.getByText("客廳 · 右側")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "電風扇 資訊展示" }),
+    ).toHaveAttribute("aria-pressed", "true");
   });
 });
 

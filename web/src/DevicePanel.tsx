@@ -5,6 +5,7 @@ import {
   Check,
   ChevronDown,
   CircleHelp,
+  Fan,
   MapPin,
   Power,
   Radio,
@@ -549,6 +550,8 @@ export default function DevicePanel({
             <Wind size={30} strokeWidth={1.4} />
           ) : device.id === "washer-1" ? (
             <Waves size={30} strokeWidth={1.4} />
+          ) : device.id === "fan-1" ? (
+            <Fan size={30} strokeWidth={1.4} />
           ) : (
             <Radio size={28} strokeWidth={1.4} />
           )}
