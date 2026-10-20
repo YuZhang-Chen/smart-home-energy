@@ -321,6 +321,31 @@ describe("accessible scene controls", () => {
       screen.getByRole("button", { name: "電風扇 資訊展示" }),
     ).toHaveAttribute("aria-pressed", "true");
   });
+
+  it("changes natural light time without changing the independent bulb or submitting equipment requests", async () => {
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(JSON.stringify(fixture()), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByLabelText("開始時間");
+    await user.click(screen.getByRole("button", { name: /智慧燈泡 燈光已開啟/ }));
+    const bulb = screen.getByRole("switch", { name: "客廳燈泡" });
+    expect(bulb).toHaveAttribute("aria-checked", "true");
+    await user.click(screen.getByRole("button", { name: /手動時間/ }));
+    fireEvent.change(screen.getByRole("slider", { name: "客廳時間" }), {
+      target: { value: "1439" },
+    });
+    expect(screen.getAllByText("23:59").length).toBeGreaterThan(0);
+    expect(bulb).toHaveAttribute("aria-checked", "true");
+    await user.click(screen.getByRole("button", { name: /加速模擬/ }));
+    expect(screen.getByRole("button", { name: "暫停" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "從 00:00 重播" }));
+    expect(bulb).toHaveAttribute("aria-checked", "true");
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+  });
 });
 
 describe("durable request retries", () => {

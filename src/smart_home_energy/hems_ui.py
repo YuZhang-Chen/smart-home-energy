@@ -65,7 +65,7 @@ def schedule_form(repo: Repository, clock, task):
                 st.error(str(error))
 
 
-@st.fragment(run_every=2)
+@st.fragment(run_every=5)
 def render_washer():
     st.subheader("洗衣手動設定")
     st.caption("虛擬洗衣機 · 模擬電價或台電正式費率估算（NT$），非實際帳單。關閉瀏覽器後，控制服務仍會執行已核准任務。")

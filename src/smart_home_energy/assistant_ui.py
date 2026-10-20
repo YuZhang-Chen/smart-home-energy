@@ -153,7 +153,7 @@ def device_card(repo, task, planning=False):
                 st.session_state["assistant_last_request"] = request(repo, "reset", {"confirmed": True}, task)
 
 
-@st.fragment(run_every=2)
+@st.fragment(run_every=5)
 def render_assistant():
     repo = Repository(HemsSettings.from_env().database)
     history = conversations(repo)

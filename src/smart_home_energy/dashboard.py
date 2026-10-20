@@ -21,7 +21,7 @@ def get_subscriber(settings: Settings) -> TelemetryClient:
     return subscriber
 
 
-@st.fragment(run_every=2)
+@st.fragment(run_every=5)
 def render_monitor(subscriber: TelemetryClient) -> None:
     assert subscriber.store is not None
     snapshot = subscriber.store.snapshot()

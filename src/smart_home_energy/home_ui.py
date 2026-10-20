@@ -14,7 +14,7 @@ from smart_home_energy.repository import Repository
 from smart_home_energy.tariffs import source_snapshot, refresh_source, household_estimate
 
 
-@st.fragment(run_every=2)
+@st.fragment(run_every=5)
 def render_ac():
     repo = Repository(HemsSettings.from_env().database)
     clock, task, state = repo.clock(), repo.active_task("ac-1"), repo.device("ac-1")
@@ -56,7 +56,7 @@ def render_ac():
                     st.error(str(error))
 
 
-@st.fragment(run_every=2)
+@st.fragment(run_every=5)
 def render_energy():
     hems = HemsSettings.from_env()
     repo = Repository(hems.database)
@@ -75,7 +75,7 @@ def render_energy():
             st.write(f"{name} · 預估 {p['energy_kwh']:.3f} 度 · NT${p['cost']:.2f}")
 
 
-@st.fragment(run_every=2)
+@st.fragment(run_every=5)
 def render_settings():
     hems = HemsSettings.from_env()
     repo = Repository(hems.database)

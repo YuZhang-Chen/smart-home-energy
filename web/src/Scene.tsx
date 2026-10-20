@@ -2,6 +2,7 @@ import {
   Component,
   Suspense,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -16,15 +17,20 @@ import {
 import { OrbitControls, RoundedBox } from "@react-three/drei";
 import {
   Color,
+  AmbientLight,
+  DirectionalLight,
   Group,
+  HemisphereLight,
   MathUtils,
   MeshStandardMaterial,
+  Object3D,
   PointLight,
   Vector3,
   PCFShadowMap,
 } from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import { devices, isAnimating, type DeviceId, type Home } from "./types";
+import { calculateDayNight, displayedMinute, type DayNightState } from "./dayNight";
 
 type Vec = [number, number, number];
 const wood = "#bb9065",
@@ -643,6 +649,59 @@ function Lamp({ on, reduced }: { on: boolean; reduced: boolean }) {
   );
 }
 
+function DayNightLighting({ clock, reduced }: { clock: DayNightState; reduced: boolean }) {
+  const ambient = useRef<AmbientLight>(null);
+  const hemisphere = useRef<HemisphereLight>(null);
+  const sun = useRef<DirectionalLight>(null);
+  const target = useMemo(() => new Object3D(), []);
+  const color = useMemo(() => new Color(), []);
+  useFrame((_, delta) => {
+    const lighting = calculateDayNight(displayedMinute(clock));
+    const alpha = reduced ? 1 : 1 - Math.exp(-delta * 3.5);
+    if (ambient.current) {
+      ambient.current.intensity = MathUtils.lerp(ambient.current.intensity, lighting.ambientIntensity, alpha);
+      ambient.current.color.lerp(color.set(lighting.ambientColor), alpha);
+    }
+    if (hemisphere.current) {
+      hemisphere.current.intensity = MathUtils.lerp(hemisphere.current.intensity, lighting.hemisphereIntensity, alpha);
+      hemisphere.current.color.lerp(color.set(lighting.hemisphereSky), alpha);
+      hemisphere.current.groundColor.lerp(color.set(lighting.hemisphereGround), alpha);
+    }
+    if (sun.current) {
+      sun.current.position.x = MathUtils.lerp(sun.current.position.x, lighting.sunPosition[0], alpha);
+      sun.current.position.y = MathUtils.lerp(sun.current.position.y, lighting.sunPosition[1], alpha);
+      sun.current.position.z = MathUtils.lerp(sun.current.position.z, lighting.sunPosition[2], alpha);
+      sun.current.intensity = MathUtils.lerp(sun.current.intensity, lighting.sunIntensity, alpha);
+      sun.current.color.lerp(color.set(lighting.sunColor), alpha);
+      target.position.set(0, 0.7, 0);
+    }
+  });
+  return (
+    <>
+      <ambientLight ref={ambient} intensity={0.75} color="#fff6e6" />
+      <hemisphereLight ref={hemisphere} args={["#c5e0f0", "#c3b59c", 1.25]} />
+      <directionalLight
+        ref={sun}
+        target={target}
+        position={[-10, 1, 5]}
+        intensity={0}
+        color="#ffd0a0"
+        castShadow
+        shadow-mapSize={[1024, 1024]}
+        shadow-camera-left={-7}
+        shadow-camera-right={7}
+        shadow-camera-top={7}
+        shadow-camera-bottom={-7}
+        shadow-camera-near={0.1}
+        shadow-camera-far={32}
+        shadow-normalBias={0.045}
+        shadow-bias={-0.00008}
+      />
+      <primitive object={target} />
+    </>
+  );
+}
+
 function CameraRig({ reset }: { reset: number }) {
   const controls = useRef<OrbitControlsImpl>(null);
   const { camera, size } = useThree();
@@ -706,6 +765,7 @@ export default function Scene({
   selected,
   onSelect,
   lightOn,
+  dayNight,
   home,
   realNow,
   reset,
@@ -713,11 +773,13 @@ export default function Scene({
   selected: DeviceId;
   onSelect: (id: DeviceId) => void;
   lightOn: boolean;
+  dayNight: DayNightState;
   home: Home | null;
   realNow: number;
   reset: number;
 }) {
   const reduced = useReducedMotion();
+  const sceneLighting = calculateDayNight(displayedMinute(dayNight));
   const [hovered, setHovered] = useState<DeviceId | null>(null);
   const label = useRef<HTMLDivElement>(null);
   const activeLabel = hovered ?? selected;
@@ -757,20 +819,7 @@ export default function Scene({
           >
             <CameraRig reset={reset} />
             <LabelTracker id={activeLabel} element={label} />
-            <ambientLight intensity={0.75} color="#fff6e6" />
-            <hemisphereLight args={["#f3f6ed", "#c3b59c", 1.25]} />
-            <directionalLight
-              position={[-3, 9, 5]}
-              intensity={2.4}
-              color="#fff2d4"
-              castShadow
-              shadow-mapSize={[1024, 1024]}
-              shadow-camera-left={-7}
-              shadow-camera-right={7}
-              shadow-camera-top={7}
-              shadow-camera-bottom={-7}
-              shadow-normalBias={0.04}
-            />
+            <DayNightLighting clock={dayNight} reduced={reduced} />
             <Furniture />
             {pick(
               "ac-1",
@@ -834,7 +883,7 @@ export default function Scene({
                 <Block
                   at={[0, 1.52, 0]}
                   size={[0.07, 2.65, 3.7]}
-                  color="#b4c4bd"
+                  color={sceneLighting.window}
                 />
                 <Block
                   at={[0.05, 1.52, 0]}

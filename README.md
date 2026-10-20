@@ -65,7 +65,7 @@ docker compose logs -f mosquitto
 .\.venv\Scripts\python.exe -m streamlit run src\smart_home_energy\dashboard.py --server.address 127.0.0.1 --browser.gatherUsageStats false
 ```
 
-開啟 [http://127.0.0.1:8501](http://127.0.0.1:8501)。冷氣初始約 30°C、待機 0 W，核准時段內才開機。網頁每兩秒更新一次，接收與重繪可能相差一個更新週期。上述分別啟動的指令為 MQTT 模式；Matter 請使用啟動腳本。
+開啟 [http://127.0.0.1:8501](http://127.0.0.1:8501)。冷氣初始約 30°C、待機 0 W，核准時段內才開機。Streamlit 各區塊每 5 秒更新一次，接收與重繪可能相差一個更新週期；可控冷氣與洗衣機仍約每秒透過 MQTT 回報狀態，設備指令處理頻率不受畫面刷新間隔影響。上述分別啟動的指令為 MQTT 模式；Matter 請使用啟動腳本。
 
 另開視窗可查看原始 MQTT 訊息，不必在 Windows 額外安裝 Mosquitto：
 

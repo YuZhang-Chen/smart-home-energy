@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import {
   ArrowUpRight,
   Armchair,
@@ -15,6 +15,19 @@ import {
   Blinds,
 } from "lucide-react";
 import { useCommands, useHome } from "./api";
+import DayNightControls from "./DayNightControls";
+import {
+  calculateDayNight,
+  clockWithMode,
+  displayedMinute,
+  localMinute,
+  replaySimulation,
+  setManualMinute,
+  setPausedSimulationMinute,
+  toggleSimulation,
+  type DayNightState,
+  type TimeMode,
+} from "./dayNight";
 import DevicePanel from "./DevicePanel";
 import {
   devices,
@@ -39,6 +52,25 @@ export default function App() {
   const [lightOn, setLightOn] = useState(true),
     [reset, setReset] = useState(0);
   const [showHelp, setShowHelp] = useState(false);
+  const [dayNight, setDayNight] = useState<DayNightState>(() => ({
+    mode: "real",
+    manualMinute: localMinute(new Date()),
+    anchorMinute: localMinute(new Date()),
+    anchorTime: performance.now(),
+    playing: false,
+  }));
+  const [, setClockTick] = useState(0);
+  useEffect(() => {
+    const refreshClock = () => setClockTick((value) => value + 1);
+    const timer = window.setInterval(refreshClock, 1000);
+    document.addEventListener("visibilitychange", refreshClock);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refreshClock);
+    };
+  }, []);
+  const minute = displayedMinute(dayNight);
+  const lighting = calculateDayNight(minute);
   const { home, error, refresh, realNow } = useHome();
   const { submit, pending, notice } = useCommands(refresh);
   const device = devices.find((d) => d.id === selected)!;
@@ -117,7 +149,13 @@ export default function App() {
         )}
         <div className="workspace">
           <div className="room-column">
-            <section className="scene-card" aria-label="3D 智慧客廳">
+            <section
+              className="scene-card"
+              aria-label="3D 智慧客廳"
+              style={{
+                background: `radial-gradient(ellipse at 50% 52%, ${lighting.sky} 0%, color-mix(in srgb, ${lighting.sky} 88%, white) 58%, color-mix(in srgb, ${lighting.sky} 78%, white) 100%)`,
+              }}
+            >
               <div className="scene-topbar">
                 <div>
                   <span className="status-dot" />
@@ -136,6 +174,7 @@ export default function App() {
                     selected={selected}
                     onSelect={setSelected}
                     lightOn={lightOn}
+                    dayNight={dayNight}
                     home={home}
                     realNow={realNow}
                     reset={reset}
@@ -187,6 +226,29 @@ export default function App() {
               </span>
               <span>你的客廳，你的視角</span>
             </div>
+            <DayNightControls
+              mode={dayNight.mode}
+              minute={minute}
+              playing={dayNight.playing}
+              onMode={(mode: TimeMode) =>
+                setDayNight((current) =>
+                  clockWithMode(current, mode, Date.now(), performance.now()),
+                )
+              }
+              onMinute={(value) =>
+                setDayNight((current) =>
+                  current.mode === "simulation"
+                    ? setPausedSimulationMinute(current, value)
+                    : setManualMinute(current, value),
+                )
+              }
+              onToggle={() =>
+                setDayNight((current) => toggleSimulation(current, performance.now()))
+              }
+              onReplay={() =>
+                setDayNight((current) => replaySimulation(current, performance.now()))
+              }
+            />
             <section className="device-list-section" aria-label="客廳設備清單">
               <div className="list-heading">
                 <h2>
@@ -252,7 +314,7 @@ export default function App() {
         <span>
           日常之間 <i /> 讓科技，安靜地融入生活。
         </span>
-        <span>虛擬設備教學場景 · 所有時間採 Asia/Taipei</span>
+        <span>設備排程：Asia/Taipei <i /> 晝夜：本機／展示時間</span>
       </footer>
     </div>
   );
