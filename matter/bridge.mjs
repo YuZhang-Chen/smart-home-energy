@@ -2,10 +2,13 @@ import { ServerNode, Endpoint } from '@matter/main';
 import { AggregatorEndpoint } from '@matter/main/endpoints/aggregator';
 import { LaundryWasherDevice } from '@matter/main/devices/laundry-washer';
 import { RoomAirConditionerDevice } from '@matter/main/devices/room-air-conditioner';
+import { ColorTemperatureLightDevice } from '@matter/main/devices/color-temperature-light';
 import { BridgedDeviceBasicInformationServer } from '@matter/main/behaviors/bridged-device-basic-information';
 import { OperationalStateServer } from '@matter/main/behaviors/operational-state';
 import { OnOffServer } from '@matter/main/behaviors/on-off';
 import { ThermostatServer } from '@matter/main/behaviors/thermostat';
+import { LevelControlServer } from '@matter/main/behaviors/level-control';
+import { ColorControlServer } from '@matter/main/behaviors/color-control';
 import { hasLocalActor } from '@matter/protocol';
 import { inflateRawSync } from 'node:zlib';
 import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
@@ -38,7 +41,11 @@ class HemsServer extends HemsBase {
     if (transfer.parts.filter(part => part !== undefined).length === count) {
       const command = JSON.parse(inflateRawSync(Buffer.from(transfer.parts.join(''), 'base64'), { maxOutputLength: 65536 }).toString('utf8'));
       if (command.command_id !== id || command.device_id !== device || Date.parse(command.expires_at) <= Date.now()) throw new Error('Invalid/expired execution context');
-      if (!['query', 'reset', 'start', 'stop'].includes(command.action)) throw new Error('Invalid device action');
+      if (!['query', 'reset', 'start', 'stop', 'set'].includes(command.action)) throw new Error('Invalid device action');
+      if (command.action === 'set' && (device !== 'bulb-1' || command.protocol_version !== 2 ||
+          !command.authorization_ref?.startsWith('request:') || command.expected_state_version < 0 ||
+          (command.level !== null && (!Number.isInteger(command.level) || command.level < 1 || command.level > 254)) ||
+          (command.mired !== null && (!Number.isInteger(command.mired) || command.mired < 154 || command.mired > 370)))) throw new Error('Invalid bulb context');
       if (command.action === 'start' && (!command.plan || !command.approval || !command.task_id || !command.run_id || command.plan_version < 1)) throw new Error('Missing approval');
       const previous = journal[id];
       if (previous && !isDeepStrictEqual(previous.command, command)) throw new Error('Command ID reused with different context');
@@ -62,13 +69,14 @@ async function execute(device, action) {
   const command = contexts.get(device);
   if (!command || command.action !== action || Date.parse(command.expires_at) <= Date.now()) throw new Error('No matching fresh approval context');
   if (!mqttClient.connected) throw new Error('MQTT device link offline');
-  const snapshot = snapshots.get(device);
-  if (!snapshot || Date.now() - Date.parse(snapshot.observed_at) > 10000 || snapshot.boot_id !== command.expected_boot || snapshot.clock_id !== command.clock_id) throw new Error('Device state is stale or identity changed');
   const previous = journal[command.command_id];
   if (previous?.result) {
     if (!previous.result.accepted) throw new Error(previous.result.message);
     return previous.result;
   }
+  const snapshot = snapshots.get(device);
+  if (!snapshot || Date.now() - Date.parse(snapshot.observed_at) > 10000 || snapshot.boot_id !== command.expected_boot ||
+      (device === 'bulb-1' ? snapshot.state_version !== command.expected_state_version : snapshot.clock_id !== command.clock_id)) throw new Error('Device state is stale or identity changed');
   // Device also persists deduplication. No retry with a different command ID.
   const result = await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => { pending.delete(command.command_id); reject(new Error('MQTT confirmation timeout')); }, 4000);
@@ -106,6 +114,33 @@ class ACThermostat extends ThermostatServer.with('Cooling') {
     });
   }
 }
+function bulbContext(expectedField, expectedValue) {
+  const command = contexts.get('bulb-1');
+  if (!command || command.action !== 'set' || command[expectedField] !== expectedValue) throw new Error('Bulb operation outside prepared target');
+  return command;
+}
+async function bulbExecute(expectedField, expectedValue) {
+  bulbContext(expectedField, expectedValue);
+  return execute('bulb-1', 'set');
+}
+class BulbOnOff extends OnOffServer.with('Lighting') {
+  async on() { this.agent.get(HemsServer).state.result = JSON.stringify(await bulbExecute('power', true)); }
+  async off() { this.agent.get(HemsServer).state.result = JSON.stringify(await bulbExecute('power', false)); }
+  async toggle() { throw new Error('Explicit bulb target required'); }
+}
+class BulbLevel extends LevelControlServer.with('OnOff', 'Lighting') {
+  async moveToLevelWithOnOff({ level }) { this.agent.get(HemsServer).state.result = JSON.stringify(await bulbExecute('level', level)); }
+  async moveToLevel({ level }) { this.agent.get(HemsServer).state.result = JSON.stringify(await bulbExecute('level', level)); }
+}
+class BulbColor extends ColorControlServer.with('ColorTemperature') {
+  async moveToColorTemperature({ colorTemperatureMireds }) {
+    const command = bulbContext('mired', colorTemperatureMireds);
+    // Combined targets are dispatched by their final Level/OnOff operation.
+    // A color-only target is complete at this command and executes here.
+    if (command.level === null && command.power === null)
+      this.agent.get(HemsServer).state.result = JSON.stringify(await execute('bulb-1', 'set'));
+  }
+}
 
 const node = await ServerNode.create({ id: 'hems-bridge', network: { port },
   commissioning: { passcode, discriminator }, basicInformation: basicInformation('HEMS bridge') });
@@ -122,8 +157,17 @@ const ac = await aggregator.add(new Endpoint(RoomAirConditionerDevice.with(ACOnO
   thermostat: { controlSequenceOfOperation: 0, systemMode: 0, occupiedCoolingSetpoint: 2700, localTemperature: 3000,
     minCoolSetpointLimit: 1600, maxCoolSetpointLimit: 3000, absMinCoolSetpointLimit: 1600, absMaxCoolSetpointLimit: 3000 },
 }));
-endpoints.set('washer-1', washer); endpoints.set('ac-1', ac);
-const subscribe = () => mqttClient.subscribe(['washer-1', 'ac-1'].flatMap(device => ['state', 'result'].map(kind => `${prefix}/devices/${device}/${kind}`)), { qos: 1 });
+const bulb = await aggregator.add(new Endpoint(ColorTemperatureLightDevice.with(BulbOnOff, BulbLevel, BulbColor, HemsServer, BridgedDeviceBasicInformationServer), {
+  id: 'bulb-1', number: 4, bridgedDeviceBasicInformation: { nodeLabel: 'Virtual living room bulb', uniqueId: 'hems-bulb-1', reachable: false },
+  hemsTask: { snapshot: '', result: '', clusterRevision: 1 },
+  onOff: { onOff: false },
+  levelControl: { currentLevel: 254 },
+  colorControl: { colorMode: 2, enhancedColorMode: 2, colorTemperatureMireds: 370,
+    colorTempPhysicalMinMireds: 154, colorTempPhysicalMaxMireds: 370,
+    coupleColorTempToLevelMinMireds: 154 },
+}));
+endpoints.set('washer-1', washer); endpoints.set('ac-1', ac); endpoints.set('bulb-1', bulb);
+const subscribe = () => mqttClient.subscribe(['washer-1', 'ac-1', 'bulb-1'].flatMap(device => ['state', 'result'].map(kind => `${prefix}/devices/${device}/${kind}`)), { qos: 1 });
 mqttClient.on('connect', subscribe);
 let updates = Promise.resolve();
 mqttClient.on('message', (topic, bytes) => {
@@ -139,6 +183,9 @@ mqttClient.on('message', (topic, bytes) => {
       if (device === 'washer-1') {
         await endpoint.set({ operationalState: { operationalState: item.status === 'fault' ? 3 : item.status === 'running' ? 1 : 0,
           currentPhase: item.status === 'running' ? Math.min(2, Math.floor(item.progress * 3)) : null } });
+      } else if (device === 'bulb-1') {
+        await endpoint.set({ onOff: { onOff: item.power }, levelControl: { currentLevel: item.level },
+          colorControl: { colorTemperatureMireds: item.mired, colorMode: 2 } });
       } else {
         await endpoint.set({ onOff: { onOff: item.status === 'running' }, thermostat: {
           localTemperature: Math.round(item.temperature_c * 100), occupiedCoolingSetpoint: Math.round(item.target_c * 100),

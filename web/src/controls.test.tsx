@@ -62,6 +62,23 @@ function fixture(): Home {
         active_task: null,
         latest_task: null,
       },
+      "bulb-1": {
+        state: {
+          device_id: "bulb-1",
+          observed_at: stamp,
+          boot_id: "bulb-boot",
+          sequence: 1,
+          state_version: 1,
+          power: true,
+          level: 254,
+          mired: 370,
+          transitioning: false,
+          fault: null,
+        },
+        fresh: true,
+        active_task: null,
+        latest_task: null,
+      },
     },
   };
 }
@@ -280,12 +297,72 @@ describe("planning and approval", () => {
 });
 
 describe("accessible scene controls", () => {
+  it("submits a 40% warm bulb target while rendering only reported state", () => {
+    const home = fixture();
+    home.devices["bulb-1"].state!.power = false;
+    const submit = vi.fn();
+    const props = {
+      device: devices.find((device) => device.id === "bulb-1")!,
+      home,
+      realNow: Date.parse(stamp),
+      lightOn: false,
+      setLightOn: vi.fn(),
+      submit,
+      busy: false,
+      connected: true,
+    };
+    const { rerender } = render(<DevicePanel {...props} />);
+    fireEvent.change(screen.getByRole("slider", { name: "燈泡亮度" }), {
+      target: { value: "40" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "套用照明設定" }));
+    expect(submit).toHaveBeenCalledWith("set_bulb", {
+      device_id: "bulb-1",
+      power: true,
+      brightness_percent: 40,
+      kelvin: 2700,
+    });
+    expect(screen.getByRole("switch", { name: "客廳燈泡" })).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByText("已關閉 · 保留環境光")).toBeInTheDocument();
+    const reported = fixture();
+    reported.devices["bulb-1"].state = {
+      ...reported.devices["bulb-1"].state!,
+      power: true,
+      level: 102,
+      state_version: 2,
+    };
+    rerender(<DevicePanel {...props} home={reported} lightOn />);
+    expect(screen.getByRole("switch", { name: "客廳燈泡" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByText(/已開啟 · 40%/)).toBeInTheDocument();
+  });
+
+  it("keeps the last bulb reading visible but disables control when telemetry is stale", () => {
+    const submit = vi.fn();
+    render(<DevicePanel device={devices.find((device) => device.id === "bulb-1")!}
+      home={fixture()} realNow={Date.parse(stamp) + 11_000} lightOn
+      setLightOn={vi.fn()} submit={submit} busy={false} connected />);
+    expect(screen.getByText("設備回報已過期，保留最後數值")).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "客廳燈泡" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "套用照明設定" })).toBeDisabled();
+    expect(submit).not.toHaveBeenCalled();
+  });
+
   it("selects all six devices and synchronizes the light with the scene", async () => {
+    let bulbPower = true;
     vi.stubGlobal(
       "fetch",
-      vi.fn(
-        async () => new Response(JSON.stringify(fixture()), { status: 200 }),
-      ),
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input);
+        if (init?.method === "POST") {
+          bulbPower = false;
+          return new Response(JSON.stringify({ request_id: "test" }), { status: 202 });
+        }
+        if (path.startsWith("/api/requests/"))
+          return new Response(JSON.stringify({ status: "done", result: "燈泡已達到設定" }), { status: 200 });
+        const home = fixture();
+        home.devices["bulb-1"].state!.power = bulbPower;
+        return new Response(JSON.stringify(home), { status: 200 });
+      }),
     );
     const user = userEvent.setup();
     render(<App />);

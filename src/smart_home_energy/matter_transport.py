@@ -20,7 +20,7 @@ class MatterHub:
     def __init__(self, repo, settings, hems):
         self.repo, self.settings, self.hems = repo, settings, hems
         self.process = None
-        self.health, self.queues = {}, {d: Queue(maxsize=1000) for d in ("washer-1", "ac-1")}
+        self.health, self.queues = {}, {d: Queue(maxsize=1000) for d in ("washer-1", "ac-1", "bulb-1")}
         self.lock, self.users = threading.RLock(), 0
         self.thread = None
         self.log = None
@@ -54,7 +54,10 @@ class MatterHub:
                     self.health[device] = (bool(value["connected"]), time.monotonic())
                 elif value.get("kind") in {"state", "result"}:
                     kind = value["kind"]
-                    if device == "ac-1":
+                    if device == "bulb-1":
+                        from smart_home_energy.bulb_domain import BulbState, BulbResult
+                        cls = BulbState if kind == "state" else BulbResult
+                    elif device == "ac-1":
                         from smart_home_energy.ac import ACState
                         cls = ACState if kind == "state" else CommandResult
                     else:

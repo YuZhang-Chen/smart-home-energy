@@ -614,6 +614,33 @@ footer i {
   padding: 24px 23px;
   min-width: 0;
 }
+.light-settings {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+}
+.light-settings label {
+  display: grid;
+  gap: 6px;
+  font-size: 11px;
+  color: #53664a;
+}
+.light-settings input[type="range"] { width: 100%; accent-color: #849b65; }
+.light-settings input[type="number"] {
+  max-width: 130px;
+  border: 1px solid #d9ddcf;
+  border-radius: 6px;
+  padding: 7px;
+}
+.light-settings button {
+  border: 0;
+  border-radius: 7px;
+  padding: 10px;
+  color: white;
+  background: #70865d;
+  cursor: pointer;
+}
+.light-settings button:disabled { opacity: 0.5; cursor: not-allowed; }
 .panel-topline {
   display: flex;
   align-items: center;

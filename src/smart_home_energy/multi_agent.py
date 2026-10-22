@@ -14,6 +14,8 @@ from smart_home_energy.domain import decode, encode, utcnow, TaskConstraints, fi
 from smart_home_energy.assistant_defaults import preferences
 from smart_home_energy.repository import AgentRun
 from smart_home_energy.tariffs import selected_tariff
+from smart_home_energy.agent_roles import agent_roles
+from smart_home_energy.light_agent import light_session
 
 
 class SharedBudget:
@@ -201,12 +203,13 @@ async def run_household(repo, event, hems, providers=None, monotonic=time.monoto
         else:
             system = """你是智慧家庭 Main Agent，使用繁體中文，每次只回一個 JSON 物件。
 工具 {"tool":"get_home_state","arguments":{},"summary":"摘要"}。
-批次委派 {"tool":"delegate_tasks","arguments":{"requests":[{"device_id":"washer-1 或 ac-1","text":"完整原始需求中與該設備相關的條件","task_id":"僅修改現有任務時填入","expected_version":1}]},"summary":"摘要"}。
-同一需求可委派兩台設備，各自核准、各自失敗。使用者已同意預設：開冷氣27°C、一小時、確認後開始；洗衣24小時內完成、避開23:00–07:00並選較便宜時段。不因未填時間而補問，將完整需求交給子 Agent 套用偏好。
+可用 get_agent_roles={} 查詢角色權責。
+批次委派 {"tool":"delegate_tasks","arguments":{"requests":[{"device_id":"washer-1、ac-1 或 bulb-1","text":"完整原始需求中與該設備相關的條件","task_id":"僅修改冷氣或洗衣現有任務時填入","expected_version":1}]},"summary":"摘要"}。
+同一需求可委派三台設備，各自失敗；冷氣與洗衣各自核准，明確照明需求由 Light Agent 直接排入控制佇列並等待回報。使用者已同意預設：開冷氣27°C、一小時、確認後開始；洗衣24小時內完成、避開23:00–07:00並選較便宜時段。不因未填時間而補問，將完整需求交給子 Agent 套用偏好。
 這些數字是初始偏好，以 get_home_state 的 preferences 為準。委派 text 保留使用者原文及明確條件，不把未說出的初始數字當成使用者指定值。
 若設備已有待補充、待核准或未啟動任務，修改同設備必須傳 task_id 與 expected_version，不新增第二個任務；未提及的設備保持原樣。缺正式費率基準等必要資訊才補問，向使用者說明需要哪個月份、多少度，不要求填JSON。
 task_id 只能取自 get_home_state.tasks 的未完成任務；設備回報可能仍帶有上次已結束的行程，不能當成目前任務。tasks 沒有該設備時，委派請省略 task_id 和 expected_version。
-先 get_home_state 再 delegate_tasks。每個設備最多一個子工作，不核准、不執行設備、不自行計算費用。
+先 get_home_state 再 delegate_tasks。每個設備最多一個子工作；Main Agent 不直接核准、不執行設備、不自行計算費用。
 僅查詢可 {"finish":"結果"}；資訊不足可 {"ask":"問題"}。"""
             messages = [{"role": "system", "content": system}, {"role": "user", "content": event.payload["text"]}]
             while True:
@@ -228,26 +231,52 @@ task_id 只能取自 get_home_state.tasks 的未完成任務；設備回報可�
                         raise ValueError("工具動作格式不符")
                     if action["tool"] == "get_home_state" and action["arguments"] == {}:
                         active = repo.active_tasks()
-                        devices = {device: repo.device(device) for device in ("washer-1", "ac-1")}
+                        devices = {device: repo.device(device) for device in ("washer-1", "ac-1", "bulb-1")}
                         for device, state in devices.items():
                             if state and not any(task.device_id == device for task in active):
                                 devices[device] = {**state, "task_id": None, "run_id": None, "plan_version": 0}
                         result = {"tasks": encode(active), "clock": encode(repo.clock()), "logical_now": encode(repo.clock().now()),
                                   "devices": devices, "timezone": "Asia/Taipei",
                                   "preferences": preferences(repo)}
+                    elif action["tool"] == "get_agent_roles" and action["arguments"] == {}:
+                        result = agent_roles()
                     elif action["tool"] == "delegate_tasks" and set(action["arguments"]) == {"requests"}:
                         requests = action["arguments"]["requests"]
-                        if not isinstance(requests, list) or not 1 <= len(requests) <= 2 or len({r["device_id"] for r in requests}) != len(requests):
-                            raise ValueError("一次委派一至兩台不同設備")
+                        if not isinstance(requests, list) or not 1 <= len(requests) <= 3 or len({r["device_id"] for r in requests}) != len(requests):
+                            raise ValueError("一次委派一至三台不同設備")
                         for item in requests:
-                            if item.get("task_id") and repo.task(item["task_id"]).status in {"completed", "cancelled", "aborted", "resolved"}:
+                            if item.get("device_id") != "bulb-1" and item.get("task_id") and repo.task(item["task_id"]).status in {"completed", "cancelled", "aborted", "resolved"}:
                                 raise ValueError("指定的是已結束任務，請重新讀取 get_home_state；沒有未完成任務的設備須省略 task_id 以建立新計畫")
                         for request in requests:
                             device = request["device_id"]
-                            if device not in {"washer-1", "ac-1"} or not isinstance(request.get("text"), str):
+                            if device not in {"washer-1", "ac-1", "bulb-1"} or not isinstance(request.get("text"), str):
                                 raise ValueError("設備或需求不合法")
                             identifier = sha256(f"{root_id}:{device}".encode()).hexdigest()
                             try:
+                                if device == "bulb-1":
+                                    # A bulb action is immediate and has no scheduler task.
+                                    # Models sometimes copy task_id/expected_version from the
+                                    # shared home-state response; discard those fields at this
+                                    # boundary instead of turning an otherwise valid light
+                                    # request into a user-visible delegation error.
+                                    request = {key: value for key, value in request.items()
+                                               if key not in {"task_id", "expected_version"}}
+                                    with repo.transaction() as db:
+                                        old = db.execute("SELECT data FROM delegations WHERE id=?", (identifier,)).fetchone()
+                                        previous = json.loads(old[0]) if old else None
+                                        if previous and previous.get("result"):
+                                            results.append(previous["result"])
+                                            continue
+                                        db.execute("INSERT OR IGNORE INTO delegations VALUES (?,?,?,?,?)",
+                                                   (identifier, root_id, device, None, json.dumps({"request_id": identifier})))
+                                    child_event = replace(event, task_id=None,
+                                                          payload={"text": event.payload["text"], "root_id": root_id})
+                                    result = await light_session(repo, child_event, budget, run_id, root_id)
+                                    results.append(result)
+                                    with repo.transaction() as db:
+                                        db.execute("UPDATE delegations SET data=? WHERE id=?",
+                                                   (json.dumps({"request_id": identifier, "result": result}), identifier))
+                                    continue
                                 with repo.transaction() as db:
                                     old = db.execute("SELECT data FROM delegations WHERE id=?", (identifier,)).fetchone()
                                     previous = json.loads(old[0]) if old else None
@@ -272,7 +301,6 @@ task_id 只能取自 get_home_state.tasks 的未完成任務；設備回報可�
                                             task = repo.update_task(task.task_id, task.version, tariff=current_tariff, plan=None, ac_plan=None)
                                     db.execute("INSERT OR IGNORE INTO delegations VALUES (?,?,?,?,?)", (identifier, root_id, device, task.task_id,
                                         json.dumps({"task_id": task.task_id, "version": task.version})))
-                                from dataclasses import replace
                                 child_event = replace(event, task_id=task.task_id, payload={"text": request["text"], "root_id": root_id})
                                 result = await device_session(repo, child_event, task, budget, run_id)
                                 results.append(result)

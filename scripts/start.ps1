@@ -33,7 +33,7 @@ if ($Transport -eq 'matter') {
     if (-not $env:HEMS_MATTER_STORAGE) { $env:HEMS_MATTER_STORAGE = Join-Path $projectRoot 'artifacts/matter' }
 }
 try {
-    $names = @('ac', 'washer')
+    $names = @('ac', 'washer', 'bulb')
     if ($Transport -eq 'matter') { $names += 'matter-bridge' }
     $names += @('control','dashboard')
     if ($With3D) { $names += 'api' }

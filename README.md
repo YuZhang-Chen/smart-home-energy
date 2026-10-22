@@ -1,14 +1,14 @@
 # 家庭助理與虛擬家電控制
 
-新增 [3D 智慧客廳](docs/LIVING_ROOM_3D.md)：React Three Fiber 場景可旋轉、縮放，點選冷氣與洗衣機設定計畫、核准並查看進度；燈泡可切換場景照明。完成前端安裝與建置後，以 `.\scripts\start.ps1 -With3D` 啟動，開啟 http://127.0.0.1:8502，原有 Streamlit 入口保留。
+新增 [3D 智慧客廳](docs/LIVING_ROOM_3D.md)：React Three Fiber 場景可旋轉、縮放，點選冷氣與洗衣機設定計畫、核准並查看進度；智慧燈泡支援開關、亮度與 2700–6500K 色溫，場景只依設備確認回報更新。完成前端安裝與建置後，以 `.\scripts\start.ps1 -With3D` 啟動，開啟 http://127.0.0.1:8502，原有 Streamlit 入口保留。
 
-首頁直接說「幫我開冷氣，順便安排洗衣」，或點快捷按鈕。助理提出計畫後，在同一張卡確認、查看進度與停止；設備入口為「冷氣」「洗衣機」「用電紀錄」。最短流程見 [家庭助理操作](docs/ASSISTANT_UI.md)。
+首頁可直接說「幫我開冷氣、安排洗衣，客廳燈調到 40% 暖光」。Main Agent 只負責查詢與委派；AC／Washer Agent 提案後仍需個別確認，Light Agent 只能把明確照明需求送入控制佇列並等待設備回報。最短流程見 [家庭助理操作](docs/ASSISTANT_UI.md)，燈泡權責與邊界見 [智慧燈泡實作計畫](docs/SMART_BULB_IMPLEMENTATION_PLAN.md)。
 
-單台電腦、零硬體成本：Main Agent 委派 Washer / AC Agents，分別提出、核准並執行虛擬洗衣與冷氣計畫。vLLM 主用，故障時才使用 Azure OpenAI 備援；沒有模型時可由表單計算排程。設備為教學模擬，費用可選模擬費率或台電三種住宅方案的增量估算，通訊可選 MQTT 或真實 Matter 橋接。
+單台電腦、零硬體成本：Main Agent 委派 Washer／AC／Light Agents，分別處理虛擬洗衣、冷氣與客廳燈泡。vLLM 主用，故障時才使用 Azure OpenAI 備援；沒有模型時仍可用表單與燈泡面板。設備為教學模擬，費用可選模擬費率或台電三種住宅方案的增量估算，通訊可選 MQTT 或真實 Matter 橋接。
 
 第二階段操作、費率假設及 Matter 設定見 [操作指南](docs/PHASE2_GUIDE.md)，測試與實際模型／Matter 證據見 [驗收紀錄](docs/PHASE2_VALIDATION.md)。
 
-安裝依賴後，可在專案根目錄一次啟動四個背景程序（需要已啟動的 Docker Desktop）：
+安裝依賴後，可在專案根目錄一次啟動設備、控制與介面服務（需要已啟動的 Docker Desktop）：
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -e .
@@ -18,7 +18,7 @@
 .\scripts\stop.ps1 -StopBroker
 ```
 
-Matter 模式另需 Node.js 22+，先執行 `npm.cmd ci --prefix matter`，再以 `.\scripts\start.ps1 -Transport matter` 啟動。直接在首頁輸入跨設備需求，洗衣與冷氣各自核准。
+Matter 模式另需 Node.js 22+，先執行 `npm.cmd ci --prefix matter`，再以 `.\scripts\start.ps1 -Transport matter` 啟動。燈泡位於 endpoint 4，使用 On/Off、Level Control 與 Color Control；洗衣與冷氣維持各自核准流程。
 
 背景日誌位於 `artifacts/runtime/`。停止腳本保留 SQLite，運轉途中停止設備程序會在下次啟動回報故障。洗衣任務取消、中止及人工解除請先在畫面操作。詳細流程見 [洗衣操作指南](docs/MAIN_AGENT_GUIDE.md)，測試範圍見 [Main Agent 驗收紀錄](docs/MAIN_AGENT_VALIDATION.md)。
 
@@ -201,4 +201,4 @@ Agent 與排程的已確認方向，以及預留的 Azure OpenAI 設定，請見
 
 首版規格與驗收清單，請見 [Main Agent 實作計畫](docs/IMPLEMENTATION_PLAN.md)。
 
-首版已實作 MQTT 虛擬洗衣控制、Main Agent、模擬費用與 SQLite。Matter、冷氣自動控制、實際電價及 Sub Agents 為後續工作。真實 Azure／vLLM 需填妥 `.env` 後另行驗證，目前驗收使用假模型。
+目前已實作 MQTT／Matter 虛擬洗衣、冷氣與智慧燈泡控制、分工 Agent、費率估算、SQLite 持久化、Streamlit 與 3D 客廳。日夜自動照明規則留待下一階段；真實 Azure／vLLM 需填妥 `.env` 後另行驗證，一般 Agent 回歸使用假模型。

@@ -49,8 +49,7 @@ const icons = {
 
 export default function App() {
   const [selected, setSelected] = useState<DeviceId>("ac-1");
-  const [lightOn, setLightOn] = useState(true),
-    [reset, setReset] = useState(0);
+  const [reset, setReset] = useState(0);
   const [showHelp, setShowHelp] = useState(false);
   const [dayNight, setDayNight] = useState<DayNightState>(() => ({
     mode: "real",
@@ -73,14 +72,20 @@ export default function App() {
   const lighting = calculateDayNight(minute);
   const { home, error, refresh, realNow } = useHome();
   const { submit, pending, notice } = useCommands(refresh);
+  const bulb = home?.devices["bulb-1"];
+  const lightOn = bulb?.state?.power ?? false;
+  const lightLevel = lightOn ? (bulb?.state?.level ?? 254) / 254 : 0;
+  const lightMired = bulb?.state?.mired ?? 370;
   const device = devices.find((d) => d.id === selected)!;
   const connectedCount = home
-    ? (["ac-1", "washer-1"] as const).filter((id) =>
+    ? (["ac-1", "washer-1", "bulb-1"] as const).filter((id) =>
         isFresh(home.devices[id], realNow),
       ).length
     : 0;
   const stateText = (item: SceneDevice) => {
-    if (item.id === "bulb-1") return lightOn ? "燈光已開啟" : "燈光已關閉";
+    if (item.id === "bulb-1")
+      return !bulb?.state ? "等待回報" : !isFresh(bulb, realNow)
+        ? "回報過期" : lightOn ? "燈光已開啟" : "燈光已關閉";
     if (item.id !== "ac-1" && item.id !== "washer-1") return "資訊展示";
     const snapshot = home?.devices[item.id];
     if (!snapshot?.state) return "等待連線";
@@ -138,7 +143,7 @@ export default function App() {
           <div className="room-summary">
             <span>YOUR LIVING ROOM</span>
             <p>
-              <b>06</b> 場景設備 <i /> <b>02</b> 控制設備
+              <b>06</b> 場景設備 <i /> <b>03</b> 控制設備
             </p>
           </div>
         </section>
@@ -174,6 +179,8 @@ export default function App() {
                     selected={selected}
                     onSelect={setSelected}
                     lightOn={lightOn}
+                    lightLevel={lightLevel}
+                    lightMired={lightMired}
                     dayNight={dayNight}
                     home={home}
                     realNow={realNow}
@@ -255,7 +262,7 @@ export default function App() {
                   <SlidersHorizontal size={16} />
                   客廳設備 <span>6</span>
                 </h2>
-                <span>{connectedCount} / 2 台服務回報中</span>
+                <span>{connectedCount} / 3 台服務回報中</span>
               </div>
               <div className="device-list">
                 {devices.map((item) => {
@@ -302,7 +309,7 @@ export default function App() {
               home={home}
               realNow={realNow}
               lightOn={lightOn}
-              setLightOn={setLightOn}
+              setLightOn={(on) => submit("set_bulb", { device_id: "bulb-1", power: on })}
               submit={submit}
               busy={!!pending}
               connected={!!home && !error}

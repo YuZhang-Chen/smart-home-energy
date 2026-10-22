@@ -15,6 +15,7 @@ import time
 from uuid import uuid4
 
 from smart_home_energy.ac_control import ACController
+from smart_home_energy.bulb_control import BulbController
 from smart_home_energy.ac_domain import ACConstraints, make_ac_plan
 from smart_home_energy.config import Settings, HemsSettings
 from smart_home_energy.control import Controller
@@ -44,6 +45,7 @@ def main():
     env = os.environ.copy()
     env.update(MQTT_HOST=settings.mqtt_host, MQTT_PORT=str(settings.mqtt_port), MQTT_TOPIC=settings.mqtt_topic,
                HEMS_DB=hems.database, HEMS_DEVICE_DB=hems.device_database, HEMS_AC_DB=str(directory / "ac.db"),
+               HEMS_BULB_DB=str(directory / "bulb.db"),
                HEMS_MQTT_ROOT=hems.mqtt_root, HEMS_MATTER_STORAGE=str(directory / "matter"), HEMS_MATTER_PORT="5550",
                HEMS_MATTER_DISCRIMINATOR="3831", PYTHONIOENCODING="utf-8")
     processes, logs, checks = [], [], {}
@@ -84,12 +86,25 @@ def main():
             from smart_home_energy.matter_transport import MatterHub, MatterTransport
             os.environ.update({key: env[key] for key in ("HEMS_MATTER_STORAGE", "HEMS_MATTER_PORT", "HEMS_MATTER_DISCRIMINATOR")})
             hub = MatterHub(repo, settings, hems)
-            transports = [MatterTransport(hub, d) for d in ("washer-1", "ac-1")]
+            transports = [MatterTransport(hub, d) for d in ("washer-1", "ac-1", "bulb-1")]
         else:
-            transports = [WasherTransport(settings, hems.mqtt_root, "control", d) for d in ("washer-1", "ac-1")]
+            transports = [WasherTransport(settings, hems.mqtt_root, "control", d) for d in ("washer-1", "ac-1", "bulb-1")]
         for transport in transports:
             transport.start()
-        controllers = [Controller(repo, transports[0], hems), ACController(repo, transports[1], hems)]
+        controllers = [Controller(repo, transports[0], hems), ACController(repo, transports[1], hems),
+                       BulbController(repo, transports[2])]
+
+    def set_bulb(label, **target):
+        identifier = "smoke-bulb-" + label
+        repo.submit(identifier, "set_bulb", {"device_id": "bulb-1", "duration_seconds": 0, **target})
+        wait(lambda: repo.request(identifier)["status"] in {"done", "error"}, "bulb_" + label, 20)
+        request = repo.request(identifier)
+        if request["status"] != "done":
+            raise AssertionError(f"Bulb action failed: {label}: {request['result']}")
+        action = repo.bulb_action(identifier)
+        if not action or action["status"] != "confirmed":
+            raise AssertionError(f"Bulb action not confirmed: {label}: {action}")
+        return repo.device("bulb-1")
 
     def schedule_washer(official=False):
         now = repo.clock().now()
@@ -104,11 +119,23 @@ def main():
     try:
         washer = spawn("washer")
         spawn("ac")
+        spawn("bulb")
         if args.transport == "matter":
             bridge = spawn("bridge")
             time.sleep(3)
         connect()
-        wait(lambda: all(t.connected for t in transports) and all(repo.device(d) for d in ("washer-1", "ac-1")), "live_device_feedback", 65)
+        wait(lambda: all(t.connected for t in transports) and all(repo.device(d) for d in ("washer-1", "ac-1", "bulb-1")), "live_device_feedback", 65)
+        state = set_bulb("on", power=True)
+        assert state["power"] and state["level"] == 254 and state["mired"] == 370
+        state = set_bulb("warm_40", power=True, brightness_percent=40, kelvin=2700)
+        assert state["power"] and state["level"] == 102 and state["mired"] == 370
+        state = set_bulb("off", power=False)
+        assert not state["power"] and state["level"] == 102 and state["mired"] == 370
+        state = set_bulb("color_while_off", kelvin=6500)
+        assert not state["power"] and state["level"] == 102 and state["mired"] == 154
+        state = set_bulb("on_retains_settings", power=True)
+        assert state["power"] and state["level"] == 102 and state["mired"] == 154
+        checks["bulb_feedback"] = {"power": state["power"], "level": state["level"], "mired": state["mired"]}
         first = schedule_washer()
         c = ACConstraints(first.plan.start, first.plan.start + timedelta(minutes=65), target_c=26.5)
         ac = repo.create_ac_task(c, selected_tariff(repo, hems.tariff()))
@@ -121,7 +148,8 @@ def main():
         if original.expires_at > utcnow():
             transports[0].publish("command", original)
         run_id = repo.device()["run_id"]
-        controllers = [Controller(repo, transports[0], hems), ACController(repo, transports[1], hems)]
+        controllers = [Controller(repo, transports[0], hems), ACController(repo, transports[1], hems),
+                       BulbController(repo, transports[2])]
         wait(lambda: controllers[0].recovered and controllers[1].recovered, "controller_recovery", 10)
         if args.transport == "matter" and original.expires_at > utcnow():
             # A reused ID with changed execution context must not replace the
@@ -158,6 +186,10 @@ def main():
         if args.transport == "matter":
             stop(bridge)
             wait(lambda: not transports[0].connected, "matter_offline_detected", 30)
+            bulb_before = repo.device("bulb-1").copy()
+            repo.submit("smoke-bulb-offline", "set_bulb", {"device_id": "bulb-1", "power": False})
+            wait(lambda: repo.request("smoke-bulb-offline")["status"] == "error", "bulb_no_mqtt_bypass", 10)
+            assert repo.device("bulb-1")["state_version"] == bulb_before["state_version"]
             held = schedule_washer()
             until = time.monotonic() + 7
             while time.monotonic() < until:
@@ -168,6 +200,8 @@ def main():
             repo.update_task(held.task_id, held.version, status="cancelled")
             bridge = spawn("bridge")
             wait(lambda: all(t.connected for t in transports) and all(controllers[i].recovered for i in range(2)), "matter_bridge_restart", 65)
+            state = set_bulb("after_bridge_restart", brightness_percent=40, kelvin=2700)
+            assert state["power"] and state["level"] == 102 and state["mired"] == 370
         second = schedule_washer(official=True)
         wait(lambda: repo.task(second.task_id).status == "running", "official_tariff_command", 20)
         task = repo.task(second.task_id)

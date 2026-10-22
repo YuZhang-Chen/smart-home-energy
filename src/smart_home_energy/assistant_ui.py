@@ -1,6 +1,7 @@
 """Conversation and approval cards; all actions go through durable requests."""
 from datetime import datetime
 import json
+from hashlib import sha256
 from uuid import uuid4
 
 import streamlit as st
@@ -46,8 +47,10 @@ def conversations(repo):
             event = db.execute("SELECT id,status FROM events WHERE key=? ORDER BY rowid DESC LIMIT 1", (key,)).fetchone()
         run = next((r for r in runs if event and r["event_id"] == event["id"] and not r.get("parent_id")), None)
         pending = row["status"] == "pending" or bool(event and event["status"] in {"pending", "running"})
+        light = repo.bulb_action(sha256(f"{payload['root_id']}:bulb-1".encode()).hexdigest()) if row["kind"] == "create_household" else None
         result.append({"id": row["id"], "text": payload["text"], "pending": pending,
-                       "run": run, "error": row["result"] if row["status"] == "error" else None})
+                       "run": run, "light_action": light,
+                       "error": row["result"] if row["status"] == "error" else None})
     return result
 
 
@@ -164,7 +167,7 @@ def render_assistant():
     if repo.clock().speed != 1:
         st.info(f"目前為 {repo.clock().speed:g} 倍展示時間；可在左側「偏好與進階設定」調整。")
     st.subheader("今天想讓家裡幫你做什麼？")
-    st.caption("說出需求，助理幫你安排。每台設備都會先請你確認，再開始執行。")
+    st.caption("說出需求，助理會安排冷氣與洗衣計畫供你確認；明確的燈泡指令會直接送出，並等待設備回報。")
     prefs = preferences(repo)
     st.caption(f"常用偏好：冷氣 {prefs['target_c']:g}°C、{prefs['duration_minutes']} 分鐘；洗衣 {prefs['washer_hours']} 小時內完成。")
     with st.container(border=True):
@@ -195,6 +198,12 @@ def render_assistant():
                     st.write(readable_message(run["message"]))
             else:
                 st.write("已收到你的需求。")
+            if latest.get("light_action"):
+                light = latest["light_action"]
+                label = {"dispatched": "已送出，等待設備受理", "accepted": "設備已受理，等待最終狀態",
+                         "confirmed": "設備已回報完成", "rejected": "設備拒絕指令",
+                         "unknown": "未能確認設備狀態"}.get(light["status"], light["status"])
+                st.caption("客廳燈泡：" + label)
         if len(history) > 1:
             with st.expander("先前的對話"):
                 for item in history[-8:-1]:

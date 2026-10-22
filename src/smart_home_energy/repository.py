@@ -65,7 +65,7 @@ class Repository:
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         self.local = threading.local()
         with self.transaction() as db:
-            if db.execute("PRAGMA user_version").fetchone()[0] > 2:
+            if db.execute("PRAGMA user_version").fetchone()[0] > 3:
                 raise ValueError("資料庫版本較新，拒絕降版")
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -91,9 +91,10 @@ class Repository:
                 db.execute("ALTER TABLE tasks ADD COLUMN device_id TEXT NOT NULL DEFAULT 'washer-1'")
             db.execute("DROP INDEX IF EXISTS single_active")
             db.execute("CREATE UNIQUE INDEX IF NOT EXISTS active_per_device ON tasks(device_id) WHERE active=1")
-            db.execute("PRAGMA user_version=2")
             db.execute("CREATE TABLE IF NOT EXISTS delegations(id TEXT PRIMARY KEY, root_id TEXT NOT NULL, device_id TEXT NOT NULL, task_id TEXT, data TEXT NOT NULL)")
             db.execute("CREATE TABLE IF NOT EXISTS energy_segments(device_id TEXT, boot_id TEXT, sequence INTEGER, task_id TEXT, run_id TEXT, start TEXT, end TEXT, power_w REAL, PRIMARY KEY(device_id,boot_id,sequence))")
+            db.execute("CREATE TABLE IF NOT EXISTS bulb_actions(id TEXT PRIMARY KEY, request_id TEXT UNIQUE, status TEXT NOT NULL, data TEXT NOT NULL, created TEXT NOT NULL, updated TEXT NOT NULL)")
+            db.execute("PRAGMA user_version=3")
 
     @contextmanager
     def transaction(self):
@@ -318,6 +319,23 @@ class Repository:
         with self.transaction() as db:
             db.execute("UPDATE requests SET status=?,result=? WHERE id=?", (status, result, request_id))
 
+    def bulb_action(self, request_id: str) -> dict | None:
+        with self.transaction() as db:
+            row = db.execute("SELECT * FROM bulb_actions WHERE request_id=?", (request_id,)).fetchone()
+            return {**dict(row), "data": json.loads(row["data"])} if row else None
+
+    def active_bulb_action(self) -> dict | None:
+        with self.transaction() as db:
+            row = db.execute("SELECT * FROM bulb_actions WHERE status IN ('dispatched','accepted') ORDER BY rowid LIMIT 1").fetchone()
+            return {**dict(row), "data": json.loads(row["data"])} if row else None
+
+    def save_bulb_action(self, request_id: str, status: str, data: dict) -> None:
+        with self.transaction() as db:
+            now = utcnow().isoformat()
+            db.execute("INSERT INTO bulb_actions(id,request_id,status,data,created,updated) VALUES (?,?,?,?,?,?) "
+                       "ON CONFLICT(request_id) DO UPDATE SET status=excluded.status,data=excluded.data,updated=excluded.updated",
+                       (request_id, request_id, status, json.dumps(encode(data), allow_nan=False), now, now))
+
     def event(self, key: str, task_id: str | None, payload: dict) -> None:
         with self.transaction() as db:
             db.execute("INSERT OR IGNORE INTO events(id,key,task_id,payload) VALUES (?,?,?,?)",
@@ -347,7 +365,7 @@ class Repository:
         with self.transaction() as db:
             from datetime import datetime
             previous = self.device(state.device_id)
-            if state.task_id and state.run_id and state.energy_kwh > 0:
+            if getattr(state, "task_id", None) and state.run_id and state.energy_kwh > 0:
                 same = previous and previous.get("run_id") == state.run_id and previous.get("boot_id") == state.boot_id
                 before = previous["energy_kwh"] if same else 0
                 start = datetime.fromisoformat(previous["logical_at"]) if same else None
@@ -388,7 +406,7 @@ class Repository:
             db.execute("INSERT INTO tool_logs(run_id,data) VALUES (?,?)", (run_id, json.dumps(encode(data), allow_nan=False)))
 
     def records(self, table: str, limit: int = 50) -> list[dict]:
-        if table not in {"agent_runs", "tool_logs", "samples", "audit", "requests", "commands", "plans", "delegations", "energy_segments"}:
+        if table not in {"agent_runs", "tool_logs", "samples", "audit", "requests", "commands", "plans", "delegations", "energy_segments", "bulb_actions"}:
             raise ValueError("不允許的紀錄查詢")
         with self.transaction() as db:
             rows = db.execute(f"SELECT * FROM {table} ORDER BY rowid DESC LIMIT ?", (limit,)).fetchall()

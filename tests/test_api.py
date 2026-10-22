@@ -12,6 +12,8 @@ if WEB_AVAILABLE:
     from fastapi.testclient import TestClient
     from smart_home_energy.api import create_app
 from smart_home_energy.ac import VirtualAC
+from smart_home_energy.bulb import VirtualBulb
+from smart_home_energy.bulb_control import BulbController
 from smart_home_energy.ac_control import ACController
 from smart_home_energy.config import HemsSettings
 from smart_home_energy.control import Controller
@@ -125,6 +127,27 @@ class ApiTests(unittest.TestCase):
             self.assertEqual(client.get('/app.js').status_code, 200)
             self.assertEqual(client.get('/api/home').status_code, 200)
             self.assertEqual(client.get('/api/does-not-exist').status_code, 404)
+
+    def test_bulb_request_uses_same_durable_queue_and_confirmed_feedback(self):
+        bulb = VirtualBulb(Repository(self.directory / 'bulb.db'), self.real)
+        self.repo.save_device(bulb.state)
+        transport = FakeTransport()
+        control = BulbController(self.repo, transport)
+        body = {'request_id': 'light-40', 'kind': 'set_bulb', 'payload': {
+            'device_id': 'bulb-1', 'brightness_percent': 40, 'kelvin': 2700, 'duration_seconds': 0}}
+        self.assertEqual(self.client.post('/api/requests', json=body).status_code, 202)
+        self.assertEqual(self.client.post('/api/requests', json=body).status_code, 202)
+        self.assertEqual(self.client.get('/api/requests/light-40').json()['status'], 'pending')
+        control.tick(self.real)
+        self.assertEqual(len(transport.sent), 1)
+        command = transport.sent[0][1]
+        transport.inbox.extend([('result', bulb.handle(command, self.real)), ('state', bulb.tick(self.real))])
+        control.tick(self.real)
+        self.assertEqual(self.client.get('/api/requests/light-40').json()['status'], 'done')
+        self.assertEqual(self.client.get('/api/home').json()['devices']['bulb-1']['state']['level'], 102)
+        bad = {'request_id': 'bad-light', 'kind': 'set_bulb', 'payload': {
+            'device_id': 'bulb-1', 'power': True, 'brightness_percent': 0}}
+        self.assertEqual(self.client.post('/api/requests', json=bad).status_code, 422)
 
 
 if __name__ == '__main__':

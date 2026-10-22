@@ -3,6 +3,43 @@
 記錄各版本的重要變更，最新版本放最上方。格式參考 [Sample CHANGELOG](https://gist.github.com/juampynr/4c18214a8eb554084e21d6e288a18a2c)，使用版本號、日期及 Added／Changed／Fixed 分類；版本 commit 以對應的 `v{版本號}:` 開頭。既有未編版紀錄保留原標題。
 
 
+## [1.3.0] - 2026-10-22
+
+新增智慧燈泡的手動／自然語言控制、MQTT 狀態同步與 Matter 橋接，並明確限制各 Agent 的設備權責。對應 commit：`v1.3.0: add smart bulb control with Matter and scoped Light Agent`。
+
+### Added
+
+- 持久化虛擬燈泡 `bulb-1`，支援開關、亮度、2700–6500K 色溫與漸變，保存狀態、命令去重及動作生命週期；控制端資料庫遷移至 v3。
+- Matter endpoint 4，透過 On/Off、Level Control、Color Control 的色溫功能控制燈泡，並與 MQTT 模擬設備狀態同步。
+- Light Agent 與設備能力登錄表：Main Agent 負責查詢與委派，Light Agent 僅能提交明確授權的燈泡動作，Controller 負責驗證、派送及確認。
+- 燈泡 API、3D 客廳開關／亮度／色溫面板，以及領域、API、Agent、前端與 MQTT／Matter 復原測試；新增智慧燈泡實作與測試文件。
+
+### Changed
+
+- 3D 燈光改由設備確認回報驅動，重新整理後可還原狀態；處理中與回報過期時顯示對應提示，助理區分已入列與已確認完成。
+- 啟動腳本納入燈泡服務；Matter 模式保留洗衣機與冷氣原有核准流程。
+
+### Fixed
+
+- 修正 Main Agent 委派「關燈」時誤帶排程欄位而顯示「燈泡即時動作不能引用排程任務」：燈泡委派忽略 `task_id`／`expected_version`，不建立排程任務。
+- 未取得燈泡最終回報的動作不再標示成功；較晚抵達的拒絕訊息不會覆蓋已確認結果。
+- 修正 Matter 色溫群集初始化、亮度命令必要參數及重複讀取結果時的解碼問題。
+
+### Validation
+
+- 首版 Python 回歸共 93 項，2 項真實模型測試略過，其餘通過；前端 21 項測試及正式建置通過。Python 編譯、Node 語法與差異格式檢查通過。
+- 隔離 Docker Mosquitto 的 MQTT 與真實 Matter 配對整合驗收通過，涵蓋開關、40% 亮度、暖／冷色溫、Broker／控制器／橋接器復原及 Matter 離線不繞道 MQTT。
+- 關燈修正另以 3 項 Light Agent 測試驗證，包含模型誤帶排程欄位仍正常排入關燈動作；一般 Agent 測試使用假模型。
+- 本次版本紀錄沿用上述已完成的測試結果；實測報告位於本機 `artifacts/phase2-mqtt-smoke.json` 與 `artifacts/phase2-matter-smoke.json`，測試容器已清理。
+
+### Known limitations
+
+- 日夜時間僅影響場景自然光，自動照明規則留待下一階段。
+- Color Control 首版提供色溫，不含 RGB／Hue／Saturation；設備為模擬燈泡，未宣稱 Matter 認證或第三方控制器互通。
+- 真實 vLLM／Azure 模型需另行設定及驗證；模型不可用時仍可使用手動燈泡面板。
+
+操作範圍與測試細節見 [智慧燈泡實作計畫](docs/SMART_BULB_IMPLEMENTATION_PLAN.md)及[測試計畫](docs/SMART_BULB_TEST_PLAN.md)。
+
 ## [1.2.0] - 2026-10-20
 
 新增客廳晝夜循環與時間控制，並統一 Streamlit 畫面刷新間隔。對應 commit：`v1.2.0: add day-night cycle and five-second Streamlit refresh`。

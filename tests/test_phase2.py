@@ -52,7 +52,7 @@ class Phase2Tests(unittest.TestCase):
         migrated.create_ac_task(self.c, Tariff())
         self.assertEqual(len(migrated.active_tasks()), 2)
         with migrated.transaction() as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 2)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 3)
 
     def test_independent_devices_and_clock_guard(self):
         ac = self.proposed_ac()

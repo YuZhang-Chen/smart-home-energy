@@ -30,7 +30,7 @@ export const devices: SceneDevice[] = [
     name: "智慧燈泡",
     english: "SMART LIGHT",
     location: "客廳 · 吊燈",
-    source: "local",
+    source: "service",
     capability: "light",
   },
   {
@@ -144,11 +144,29 @@ export interface DeviceSnapshot {
   active_task: Task | null;
   latest_task: Task | null;
 }
+export interface BulbState {
+  device_id: "bulb-1";
+  observed_at: string;
+  boot_id: string;
+  sequence: number;
+  state_version: number;
+  power: boolean;
+  level: number;
+  mired: number;
+  transitioning: boolean;
+  fault: string | null;
+}
+export interface BulbSnapshot {
+  state: BulbState | null;
+  fresh: boolean;
+  active_task: null;
+  latest_task: null;
+}
 export interface Home {
   server_time: string;
   assistant_url: string;
   clock: { now: string; speed: number; clock_id: string };
-  devices: Record<LiveId, DeviceSnapshot>;
+  devices: Record<LiveId, DeviceSnapshot> & { "bulb-1": BulbSnapshot };
   preferences: {
     target_c: number;
     minimum_c: number;
@@ -173,7 +191,7 @@ export interface RequestStatus {
 }
 
 export function isFresh(
-  snapshot: DeviceSnapshot | undefined,
+  snapshot: { state: { observed_at: string } | null } | undefined,
   realNow: number,
 ): boolean {
   if (!snapshot?.state) return false;

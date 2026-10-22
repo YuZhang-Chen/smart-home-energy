@@ -290,16 +290,18 @@ def main():
         repo.recover_events()
         import os
         from smart_home_energy.ac_control import ACController
+        from smart_home_energy.bulb_control import BulbController
         mode = os.getenv("HEMS_TRANSPORT", "mqtt")
         if mode not in {"mqtt", "matter"}:
             raise ValueError("HEMS_TRANSPORT 只支援 mqtt 或 matter")
         if mode == "matter":
             from smart_home_energy.matter_transport import MatterHub, MatterTransport
             hub = MatterHub(repo, settings, hems)
-            transports = [MatterTransport(hub, device) for device in ("washer-1", "ac-1")]
+            transports = [MatterTransport(hub, device) for device in ("washer-1", "ac-1", "bulb-1")]
         else:
-            transports = [WasherTransport(settings, hems.mqtt_root, "control", device) for device in ("washer-1", "ac-1")]
-        controllers = [Controller(repo, transports[0], hems), ACController(repo, transports[1], hems)]
+            transports = [WasherTransport(settings, hems.mqtt_root, "control", device) for device in ("washer-1", "ac-1", "bulb-1")]
+        controllers = [Controller(repo, transports[0], hems), ACController(repo, transports[1], hems),
+                       BulbController(repo, transports[2])]
         stopped = threading.Event()
         worker = threading.Thread(target=agent_worker, args=(repo, hems, stopped), daemon=True, name="main-agent")
         for transport in transports:

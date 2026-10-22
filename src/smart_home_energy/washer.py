@@ -213,6 +213,9 @@ class WasherTransport:
             if self.device_id == "ac-1":
                 from smart_home_energy.ac import ACCommand, ACState
                 cls = {"command": ACCommand, "state": ACState, "result": CommandResult}[kind]
+            elif self.device_id == "bulb-1":
+                from smart_home_energy.bulb_domain import BulbCommand, BulbState, BulbResult
+                cls = {"command": BulbCommand, "state": BulbState, "result": BulbResult}[kind]
             data = json.loads(message.payload)
             if not isinstance(data, dict) or set(data) != {f.name for f in fields(cls)}:
                 raise ValueError("MQTT 訊息必須包含完整協議欄位")

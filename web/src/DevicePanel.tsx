@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import {
   ArrowRight,
   CalendarClock,
@@ -527,6 +527,16 @@ export default function DevicePanel({
     fresh = isFresh(snapshot, realNow);
   const task = snapshot?.active_task ?? snapshot?.latest_task;
   const [showEdit, setShowEdit] = useState(false);
+  const bulbState = home?.devices["bulb-1"]?.state;
+  const bulbFresh = isFresh(home?.devices["bulb-1"], realNow);
+  const [brightness, setBrightness] = useState(100);
+  const [kelvin, setKelvin] = useState(2700);
+  useEffect(() => {
+    if (bulbState) {
+      setBrightness(Math.max(1, Math.round(bulbState.level * 100 / 254)));
+      setKelvin(Math.round(1_000_000 / bulbState.mired / 100) * 100);
+    }
+  }, [bulbState?.state_version]);
   const canEdit =
     !snapshot?.active_task ||
     ["needs_details", "pending", "scheduled"].includes(
@@ -537,7 +547,7 @@ export default function DevicePanel({
       <div className="panel-topline">
         <span className="eyebrow">DEVICE DETAILS</span>
         <span className="panel-number">
-          {live
+          {live || device.id === "bulb-1"
             ? "已串接虛擬設備"
             : device.source === "local"
               ? "本頁互動"
@@ -660,6 +670,12 @@ export default function DevicePanel({
         </>
       ) : device.id === "bulb-1" ? (
         <>
+          <div className={`connection-strip ${bulbFresh && connected ? "online" : "waiting"}`}>
+            <span className="status-dot" />
+            {!bulbState ? "等待設備首次回報" : !bulbFresh || !connected
+              ? "設備回報已過期，保留最後數值" : bulbState.transitioning
+                ? "燈光調整中" : bulbState.fault ?? "設備狀態已同步"}
+          </div>
           <div className="light-preview" data-on={lightOn}>
             <div className="light-orb" />
             <span>
@@ -669,24 +685,39 @@ export default function DevicePanel({
           <div className="light-control">
             <div>
               <h3>客廳照明</h3>
-              <p>{lightOn ? "已開啟 · 暖色光" : "已關閉 · 保留環境光"}</p>
+              <p>{lightOn ? `已開啟 · ${Math.round((bulbState?.level ?? 254) * 100 / 254)}% · ${Math.round(1_000_000 / (bulbState?.mired ?? 370))}K` : "已關閉 · 保留環境光"}</p>
             </div>
             <button
               className="switch"
               role="switch"
               aria-label="客廳燈泡"
               aria-checked={lightOn}
+              disabled={busy || !connected || !bulbFresh}
               onClick={() => setLightOn(!lightOn)}
             >
               <span />
             </button>
           </div>
+          <div className="light-settings">
+            <label>亮度 {brightness}%
+              <input type="range" aria-label="燈泡亮度" min="1" max="100" value={brightness}
+                disabled={busy || !connected || !bulbFresh}
+                onChange={(event) => setBrightness(Number(event.target.value))} />
+            </label>
+            <label>色溫 K
+              <input type="number" aria-label="燈泡色溫" min="2700" max="6500" step="100" value={kelvin}
+                disabled={busy || !connected || !bulbFresh}
+                onChange={(event) => setKelvin(Number(event.target.value))} />
+            </label>
+            <button type="button" disabled={busy || !connected || !bulbFresh || kelvin < 2700 || kelvin > 6500}
+              onClick={() => submit("set_bulb", { device_id: "bulb-1", power: true,
+                brightness_percent: brightness, kelvin })}>
+              套用照明設定
+            </button>
+          </div>
           <div className="panel-footnote">
             <CircleHelp size={16} />
-            <p>
-              本頁展示互動，直接改變 3D 場景照明；重新整理後恢復開啟，不連接
-              MQTT 設備。
-            </p>
+            <p>照明效果依設備回報同步；關閉時保留上次亮度與色溫。</p>
           </div>
         </>
       ) : (

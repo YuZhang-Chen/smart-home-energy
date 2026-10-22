@@ -602,23 +602,26 @@ function Washer({ running, reduced }: { running: boolean; reduced: boolean }) {
   );
 }
 
-function Lamp({ on, reduced }: { on: boolean; reduced: boolean }) {
+function Lamp({ on, level, mired, reduced }: { on: boolean; level: number; mired: number; reduced: boolean }) {
   const light = useRef<PointLight>(null),
     material = useRef<MeshStandardMaterial>(null);
+  const color = new Color("#ffcd9a").lerp(new Color("#f5f9ff"), Math.max(0, Math.min(1, (370 - mired) / 216)));
   useFrame((_, dt) => {
     const alpha = reduced ? 1 : 1 - Math.exp(-dt * 18);
     if (light.current)
       light.current.intensity = MathUtils.lerp(
         light.current.intensity,
-        on ? 26 : 0,
+        on ? 26 * level : 0,
         alpha,
       );
     if (material.current)
       material.current.emissiveIntensity = MathUtils.lerp(
         material.current.emissiveIntensity,
-        on ? 1.4 : 0,
+        on ? 1.4 * level : 0,
         alpha,
       );
+    if (light.current) light.current.color.lerp(color, alpha);
+    if (material.current) material.current.emissive.lerp(color, alpha);
   });
   return (
     <>
@@ -634,14 +637,14 @@ function Lamp({ on, reduced }: { on: boolean; reduced: boolean }) {
           ref={material}
           color="#fff3cf"
           emissive={new Color("#ffd99a")}
-          emissiveIntensity={on ? 1.4 : 0}
+          emissiveIntensity={on ? 1.4 * level : 0}
         />
       </mesh>
       <pointLight
         ref={light}
         position={[0, -0.35, 0]}
-        intensity={on ? 26 : 0}
-        color="#ffdfac"
+        intensity={on ? 26 * level : 0}
+        color={color}
         distance={9}
         decay={2}
       />
@@ -765,6 +768,8 @@ export default function Scene({
   selected,
   onSelect,
   lightOn,
+  lightLevel,
+  lightMired,
   dayNight,
   home,
   realNow,
@@ -773,6 +778,8 @@ export default function Scene({
   selected: DeviceId;
   onSelect: (id: DeviceId) => void;
   lightOn: boolean;
+  lightLevel: number;
+  lightMired: number;
   dayNight: DayNightState;
   home: Home | null;
   realNow: number;
@@ -929,7 +936,7 @@ export default function Scene({
             {pick(
               "bulb-1",
               [-0.55, 2.7, 0.1],
-              <Lamp on={lightOn} reduced={reduced} />,
+              <Lamp on={lightOn} level={lightLevel} mired={lightMired} reduced={reduced} />,
             )}
             {pick("fan-1", [3.05, 0, 1.55], <Fan />)}
             <mesh

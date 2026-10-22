@@ -1,0 +1,7 @@
+{
+  "Main Agent": {"devices": ["washer-1", "ac-1", "bulb-1"], "can": ["read_home", "read_roles", "delegate"], "cannot": ["control_device", "approve_task"]},
+  "Washer Agent": {"devices": ["washer-1"], "can": ["read_washer", "propose_washer_plan"], "cannot": ["approve_task", "control_device", "delegate"]},
+  "AC Agent": {"devices": ["ac-1"], "can": ["read_ac", "propose_ac_plan"], "cannot": ["approve_task", "control_device", "delegate"]},
+  "Light Agent": {"devices": ["bulb-1"], "can": ["read_bulb", "submit_explicit_light_action"], "cannot": ["control_other_device", "create_rule", "delegate"]},
+  "Controller": {"devices": ["washer-1", "ac-1", "bulb-1"], "can": ["validate_authorization", "dispatch_command", "confirm_feedback"], "cannot": ["infer_user_intent"]}
+}

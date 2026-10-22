@@ -124,7 +124,28 @@ class ConfirmedRequest(RequestInput):
     payload: ConfirmedPayload
 
 
-WebRequest = Annotated[ACRequest | WasherRequest | ApprovalRequest | TaskRequest | ConfirmedRequest,
+class BulbPayload(Input):
+    device_id: Literal["bulb-1"] = "bulb-1"
+    power: bool | None = Field(default=None, strict=True)
+    brightness_percent: float | None = Field(default=None, ge=0, le=100)
+    kelvin: float | None = Field(default=None, ge=2700, le=6500)
+    duration_seconds: float = Field(default=0.5, ge=0, le=10)
+
+    @model_validator(mode="after")
+    def light_target(self):
+        if self.power is None and self.brightness_percent is None and self.kelvin is None:
+            raise ValueError("燈泡請求須指定開關、亮度或色溫")
+        if self.power is True and self.brightness_percent == 0:
+            raise ValueError("開燈不能同時指定 0% 亮度")
+        return self
+
+
+class BulbRequest(RequestInput):
+    kind: Literal["set_bulb"]
+    payload: BulbPayload
+
+
+WebRequest = Annotated[ACRequest | WasherRequest | ApprovalRequest | TaskRequest | ConfirmedRequest | BulbRequest,
                        Body(discriminator="kind")]
 
 
@@ -142,13 +163,13 @@ def create_app(repo: Repository | None = None, hems: HemsSettings | None = None,
         with repo.transaction():
             clock, real = repo.clock(), utcnow()
             devices = {}
-            for identifier in ("ac-1", "washer-1"):
+            for identifier in ("ac-1", "washer-1", "bulb-1"):
                 state = repo.device(identifier)
                 fresh = bool(state and -2 <= (real - datetime.fromisoformat(state["observed_at"])).total_seconds() <= 10)
                 devices[identifier] = {
                     "state": state, "fresh": fresh,
-                    "active_task": encode(repo.active_task(identifier)),
-                    "latest_task": encode(repo.latest_task(identifier)),
+                    "active_task": encode(repo.active_task(identifier)) if identifier != "bulb-1" else None,
+                    "latest_task": encode(repo.latest_task(identifier)) if identifier != "bulb-1" else None,
                 }
             return {"server_time": real.isoformat(), "assistant_url": f"http://127.0.0.1:{dashboard_port}", "clock": {"now": clock.now(real).isoformat(),
                     "speed": clock.speed, "clock_id": clock.clock_id}, "devices": devices,
