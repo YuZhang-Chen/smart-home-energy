@@ -285,6 +285,13 @@ def agent_worker(repo: Repository, hems: HemsSettings, stopped):
                 repo.add_assistant_reply(assistant_run["id"], run.message)
                 repo.append_assistant_event(assistant_run["id"], {"kind": "finished"})
                 if status != "failed":
+                    from hashlib import sha256
+                    light_request = sha256(f"{root_id}:bulb-1".encode()).hexdigest()
+                    if repo.request(light_request):
+                        repo.append_assistant_event(assistant_run["id"], {
+                            "kind": "light_card", "tool_call_id": f"light:{light_request}",
+                            "request_id": light_request,
+                        })
                     with repo.transaction() as db:
                         delegated = db.execute("SELECT device_id,task_id FROM delegations WHERE root_id=? AND task_id IS NOT NULL ORDER BY rowid", (root_id,)).fetchall()
                     existing = repo.assistant_events(assistant_run["id"], 0)

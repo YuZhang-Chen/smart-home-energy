@@ -122,6 +122,40 @@ class BulbTests(unittest.TestCase):
         self.assertEqual(shared.request("request-offline")["status"], "error")
         self.assertEqual(transport.sent, [])
 
+    def test_newest_request_replaces_transition_after_device_reports_version(self):
+        shared = Repository(self.directory / "control.db")
+        transport = FakeTransport()
+        control = BulbController(shared, transport)
+        shared.save_device(self.bulb.state)
+        shared.submit("first", "set_bulb", {"device_id": "bulb-1", "brightness_percent": 40, "duration_seconds": 5})
+        control.tick(self.real)
+        first = transport.sent[0][1]
+        shared.submit("second", "set_bulb", {"device_id": "bulb-1", "power": False, "duration_seconds": 0})
+        control.tick(self.real)
+        self.assertEqual(len(transport.sent), 1)
+        transport.inbox.extend([("result", self.bulb.handle(first, self.real)), ("state", self.bulb.tick(self.real))])
+        control.tick(self.real)
+        self.assertEqual(shared.bulb_action("first")["status"], "superseded")
+        self.assertEqual(len(transport.sent), 2)
+        second = transport.sent[1][1]
+        transport.inbox.extend([("result", self.bulb.handle(second, self.real)), ("state", self.bulb.tick(self.real))])
+        control.tick(self.real)
+        self.assertEqual(shared.bulb_action("second")["status"], "confirmed")
+        self.assertFalse(self.bulb.state.power)
+
+    def test_late_agent_result_cannot_override_newer_manual_request(self):
+        shared = Repository(self.directory / "control.db")
+        transport = FakeTransport()
+        control = BulbController(shared, transport)
+        shared.save_device(self.bulb.state)
+        shared.submit("assistant:old", "create_household", {"root_id": "old", "text": "開燈"})
+        shared.submit("manual", "set_bulb", {"device_id": "bulb-1", "power": False})
+        shared.submit("slow-agent", "set_bulb", {"device_id": "bulb-1", "power": True, "source": "Light Agent", "authorization_ref": "household:old"})
+        control.tick(self.real)
+        self.assertEqual(shared.bulb_action("slow-agent")["status"], "superseded")
+        self.assertEqual(len(transport.sent), 1)
+        self.assertFalse(transport.sent[0][1].power)
+
     def test_late_rejection_cannot_downgrade_a_confirmed_action(self):
         shared = Repository(self.directory / "control.db")
         transport = FakeTransport()

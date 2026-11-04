@@ -151,12 +151,15 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(self.client.post('/api/requests', json=body).status_code, 202)
         self.assertEqual(self.client.post('/api/requests', json=body).status_code, 202)
         self.assertEqual(self.client.get('/api/requests/light-40').json()['status'], 'pending')
+        self.assertIsNone(self.client.get('/api/requests/light-40').json()['action'])
         control.tick(self.real)
         self.assertEqual(len(transport.sent), 1)
+        self.assertEqual(self.client.get('/api/requests/light-40').json()['action']['status'], 'dispatched')
         command = transport.sent[0][1]
         transport.inbox.extend([('result', bulb.handle(command, self.real)), ('state', bulb.tick(self.real))])
         control.tick(self.real)
         self.assertEqual(self.client.get('/api/requests/light-40').json()['status'], 'done')
+        self.assertEqual(self.client.get('/api/requests/light-40').json()['action']['status'], 'confirmed')
         self.assertEqual(self.client.get('/api/home').json()['devices']['bulb-1']['state']['level'], 102)
         bad = {'request_id': 'bad-light', 'kind': 'set_bulb', 'payload': {
             'device_id': 'bulb-1', 'power': True, 'brightness_percent': 0}}

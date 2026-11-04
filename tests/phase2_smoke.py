@@ -29,6 +29,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--transport", choices=["mqtt", "matter"], default="matter")
     parser.add_argument("--port", type=int, default=18884)
+    parser.add_argument("--bulb-only", action="store_true", help="Run isolated bulb transport checks only")
     parser.add_argument("--recovery", action="store_true")
     parser.add_argument("--broker-container", default="hems-phase2-mosquitto")
     args = parser.parse_args()
@@ -136,6 +137,18 @@ def main():
         state = set_bulb("on_retains_settings", power=True)
         assert state["power"] and state["level"] == 102 and state["mired"] == 154
         checks["bulb_feedback"] = {"power": state["power"], "level": state["level"], "mired": state["mired"]}
+        repo.submit("smoke-light-old", "set_bulb", {"device_id": "bulb-1", "brightness_percent": 80, "duration_seconds": 5})
+        wait(lambda: (repo.bulb_action("smoke-light-old") or {}).get("status") in {"dispatched", "accepted"}, "bulb_old_dispatched", 20)
+        repo.submit("smoke-light-new", "set_bulb", {"device_id": "bulb-1", "power": False, "duration_seconds": 0})
+        wait(lambda: (repo.bulb_action("smoke-light-new") or {}).get("status") == "confirmed", "bulb_latest_confirmed", 30)
+        assert repo.bulb_action("smoke-light-old")["status"] == "superseded"
+        assert not repo.device("bulb-1")["power"]
+        checks["bulb_latest_supersedes_transition"] = True
+        if args.bulb_only:
+            report = {"passed": True, "transport": args.transport, "checks": checks, "directory": str(directory)}
+            (directory / "bulb-smoke.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+            print(json.dumps(report), flush=True)
+            return
         first = schedule_washer()
         c = ACConstraints(first.plan.start, first.plan.start + timedelta(minutes=65), target_c=26.5)
         ac = repo.create_ac_task(c, selected_tariff(repo, hems.tariff()))

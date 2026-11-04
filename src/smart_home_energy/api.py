@@ -244,14 +244,15 @@ def create_app(repo: Repository | None = None, hems: HemsSettings | None = None,
                 messages.append(message)
                 continue
             run_id = message["id"].split(":", 1)[1]
-            cards = [row["payload"] for row in repo.assistant_events(run_id, 0) if row["payload"].get("kind") == "task_card"]
+            cards = [row["payload"] for row in repo.assistant_events(run_id, 0) if row["payload"].get("kind") in {"task_card", "light_card"}]
             if cards:
                 message["toolCalls"] = [{"id": card["tool_call_id"], "type": "function", "function": {
-                    "name": "render_task_card", "arguments": json.dumps({"task_id": card["task_id"], "version": card["version"], "device_id": card["device_id"]}, separators=(",", ":"))}}
+                    "name": "render_light_card" if card["kind"] == "light_card" else "render_task_card",
+                    "arguments": json.dumps({"request_id": card["request_id"]} if card["kind"] == "light_card" else {"task_id": card["task_id"], "version": card["version"], "device_id": card["device_id"]}, separators=(",", ":"))}}
                     for card in cards]
             messages.append(message)
             messages.extend({"id": f"tool:{card['tool_call_id']}", "role": "tool", "toolCallId": card["tool_call_id"],
-                             "content": "此為資料庫中已保存的設備計畫；執行仍須依核准卡片操作。"} for card in cards)
+                             "content": "燈泡動作狀態以設備回報為準。" if card["kind"] == "light_card" else "此為資料庫中已保存的設備計畫；執行仍須依核准卡片操作。"} for card in cards)
         with repo.transaction() as db:
             runs = [dict(row) for row in db.execute("SELECT id,message_id,root_id,status,response,created,updated FROM assistant_runs ORDER BY created DESC LIMIT 100")]
         active = next((r for r in runs if r["status"] in {"pending", "running"}), None)
@@ -362,7 +363,12 @@ def create_app(repo: Repository | None = None, hems: HemsSettings | None = None,
         row = repo.request(request_id)
         if row is None:
             raise HTTPException(404, "找不到請求")
-        return {"request_id": row["id"], "kind": row["kind"], "status": row["status"], "result": row["result"]}
+        result = {"request_id": row["id"], "kind": row["kind"], "status": row["status"], "result": row["result"]}
+        if row["kind"] == "set_bulb":
+            result["action"] = repo.bulb_action(request_id)
+            payload = json.loads(row["payload"])
+            result["target"] = {key: payload[key] for key in ("power", "brightness_percent", "kelvin") if payload.get(key) is not None}
+        return result
 
     @app.get("/api/{unknown:path}", include_in_schema=False)
     def unknown_api(unknown: str):

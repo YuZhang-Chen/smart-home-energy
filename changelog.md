@@ -2,6 +2,32 @@
 
 記錄各版本的重要變更，最新版本放最上方。格式參考 [Sample CHANGELOG](https://gist.github.com/juampynr/4c18214a8eb554084e21d6e288a18a2c)，使用版本號、日期及 Added／Changed／Fixed 分類；版本 commit 以對應的 `v{版本號}:` 開頭。既有未編版紀錄保留原標題。
 
+## [1.5.0] - 2026-11-04
+
+完成 Light Agent 明確照明指令到虛擬燈泡的控制與回報串接。對應 commit：`v1.5.0: connect Light Agent feedback and prioritize newer commands`。
+
+### Added
+
+- 家庭助理照明動作卡，顯示指令目標、處理進度、設備確認、拒絕、未知及被取代狀態；重新整理後由持久化對話還原。
+- 燈泡請求狀態 API 回傳動作紀錄與使用者指定目標，供卡片追蹤設備回報。
+- 新增 Agent 到虛擬燈泡閉環、對話卡還原、指令競爭，以及 MQTT／Matter 漸變取代測試；真實模型驗收腳本增加燈泡情境。
+
+### Changed
+
+- 燈泡控制依原始家庭或手動請求順序仲裁，避免較晚返回的舊 Agent 動作覆蓋新指令；取得已派送命令的設備版本後，再派送新目標。
+- 燈泡動作確認只比對該次指定的亮度與色溫，避免在漸變中取代關燈時，因未指定亮度的中間變化而誤判結果未知。
+
+### Validation
+
+- Python 完整回歸 122 passed、4 skipped；前端 23 項測試及正式建置通過。真實 Light Agent 模型測試另行啟用並通過。
+- 隔離環境中，真實模型經 Copilot Runtime、Matter、MQTT 控制虛擬燈泡，40%／2700K 收到設備確認；網頁另驗證關燈及重新整理後還原卡片。
+- MQTT 與 Matter 的隔離燈泡測試通過開關、調光、色溫和漸變中由新指令取代的情境。詳細結果見 [Light Agent 整合驗證](docs/LIGHT_AGENT_INTEGRATION_2026-11-04.md)。
+
+### Known limitations
+
+- 對話服務一次只接受一筆處理中的聊天工作；前一筆仍在分析時，第二筆聊天需求須稍候。手動設備請求可與 Agent 工作競爭並依原始順序仲裁。
+- 日夜／presence 規則尚未串接設備，實體燈泡、聊天 SSE 游標及對話交易／重啟恢復不在本次驗收範圍。
+
 
 ## [1.4.0] - 2026-11-04
 

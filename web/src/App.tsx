@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { CopilotSidebar, useConfigureSuggestions, useRenderTool } from "@copilotkit/react-core/v2";
 import { z } from "zod";
-import { useCommands, useHome } from "./api";
+import { json, useCommands, useHome } from "./api";
 import DayNightControls from "./DayNightControls";
 import {
   calculateDayNight,
@@ -96,6 +96,11 @@ export default function App() {
     parameters: z.object({ task_id: z.string(), version: z.number(), device_id: z.string() }),
     render: ({ parameters }) => <ProposalCard taskId={parameters.task_id} version={parameters.version} home={home} submit={submit} busy={!!pending} />,
   }, [submit, pending, home]);
+  useRenderTool({
+    name: "render_light_card",
+    parameters: z.object({ request_id: z.string() }),
+    render: ({ parameters }) => parameters.request_id ? <LightActionCard requestId={parameters.request_id} /> : null,
+  }, []);
   useEffect(() => {
     if (!drawerOpen) return;
     const previous = opener.current ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
@@ -338,6 +343,32 @@ export default function App() {
       <CopilotSidebar agentId="home" threadId="home" open={assistantOpen} onOpenChange={(open) => { setAssistantOpen(open); if (open) setDrawerOpen(false); }} width={420} labels={{ modalHeaderTitle: "家庭助理", chatInputPlaceholder: "描述你想安排的設備需求…" }} />
     </div>
   );
+}
+
+export function LightActionCard({ requestId }: { requestId: string }) {
+  const [data, setData] = useState<{status: string; result: string | null; action: {status: string} | null; target: {power?: boolean; brightness_percent?: number; kelvin?: number}} | null>(null);
+  const [offline, setOffline] = useState(false);
+  useEffect(() => {
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      try {
+        const result = await json<NonNullable<typeof data>>(`/api/requests/${encodeURIComponent(requestId)}`);
+        if (!stopped) { setData(result); setOffline(false); }
+      } catch { if (!stopped) setOffline(true); }
+      if (!stopped) timer = setTimeout(poll, 2000);
+    };
+    void poll();
+    return () => { stopped = true; clearTimeout(timer); };
+  }, [requestId]);
+  const status = data?.action?.status ?? (data?.status === "error" ? "rejected" : "queued");
+  const labels: Record<string, string> = {queued: "等待處理", dispatched: "正在調整", accepted: "等待設備確認", confirmed: "設備已確認", rejected: "設備拒絕", unknown: "結果未知", superseded: "已被新指令取代", partial: "部分完成"};
+  const target = data?.target;
+  return <div className="proposal-card" aria-live="polite">
+    <strong>客廳燈</strong><p>{offline ? "無法連線，正在重新查詢" : labels[status] ?? "處理中"}</p>
+    {target && <p>{[target.power === undefined ? null : target.power ? "開啟" : "關閉", target.brightness_percent === undefined ? null : `亮度 ${target.brightness_percent}%`, target.kelvin === undefined ? null : `色溫 ${target.kelvin}K`].filter(Boolean).join(" · ")}</p>}
+    {data?.result && <p>{data.result}</p>}
+  </div>;
 }
 
 export function ProposalCard({ taskId, version, home, submit, busy }: { taskId?: string; version?: number; home: Home | null; submit: (kind: string, payload: Record<string, unknown>) => void; busy: boolean }) {

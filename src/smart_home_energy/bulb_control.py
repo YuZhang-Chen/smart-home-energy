@@ -53,19 +53,48 @@ class BulbController:
         target = action["data"]
         state = self.state()
         if state and fresh(state, real) and state.action_id == action["request_id"] and not state.transitioning:
-            if (state.power == target["power"] and state.level == target["level"]
-                    and state.mired == target["mired"] and state.last_command_id == target["command_id"]):
+            if (state.power == target["power"]
+                    and (not target.get("check_level", True) or state.level == target["level"])
+                    and (not target.get("check_mired", True) or state.mired == target["mired"])
+                    and state.last_command_id == target["command_id"]):
                 self.finish(action, "confirmed", "燈泡已達到設定並回報狀態")
                 return
         if datetime.fromisoformat(target["confirm_by"]) <= real:
             self.finish(action, "unknown", "燈泡狀態未確認，請查核設備")
 
     def process_requests(self, real: datetime):
+        # Rank by the original user request, not the time a slower agent finishes.
+        with self.repo.transaction() as db:
+            rows = [dict(row) for row in db.execute("SELECT rowid AS sequence,id,kind,payload FROM requests WHERE kind IN ('set_bulb','create_household') ORDER BY rowid")]
+        roots = {}
+        for row in rows:
+            if row["kind"] == "create_household":
+                roots[json.loads(row["payload"]).get("root_id")] = row["sequence"]
+        ranks = {}
+        for row in rows:
+            if row["kind"] != "set_bulb":
+                continue
+            payload = json.loads(row["payload"])
+            ref = payload.get("authorization_ref", "")
+            root = ref.removeprefix("household:") if payload.get("source") == "Light Agent" and ref.startswith("household:") else None
+            ranks[row["id"]] = roots.get(root, row["sequence"])
+        newest = max(ranks.values(), default=0)
         for request in self.repo.pending_requests():
             if request["kind"] != "set_bulb" or self.repo.bulb_action(request["id"]):
                 continue
-            if self.repo.active_bulb_action():
-                return  # Serialize changes until the previous target is reconciled.
+            if ranks.get(request["id"], 0) < newest:
+                self.repo.save_bulb_action(request["id"], "superseded", {})
+                self.repo.finish_request(request["id"], "error", "已被較新的照明指令取代")
+                continue
+            active = self.repo.active_bulb_action()
+            if active:
+                state = self.state()
+                # Wait until the previous command's version is visible before
+                # sending the new one; otherwise an old snapshot can race it.
+                if ranks.get(active["request_id"], 0) < newest and state and fresh(state, real) and state.last_command_id == active["data"]["command_id"]:
+                    self.finish(active, "superseded", "已被較新的照明指令取代")
+                else:
+                    return
             try:
                 with self.repo.transaction():
                     payload = json.loads(request["payload"])
@@ -91,7 +120,9 @@ class BulbController:
                                           real + timedelta(seconds=10), "request:" + request["id"],
                                           power=power, level=level, mired=mired, duration_seconds=duration)
                     target = {"command_id": command.command_id, "power": desired_power, "level": desired_level,
-                              "mired": desired_mired, "confirm_by": (real + timedelta(seconds=duration + 6)).isoformat()}
+                              "mired": desired_mired, "check_level": level is not None,
+                              "check_mired": mired is not None,
+                              "confirm_by": (real + timedelta(seconds=duration + 6)).isoformat()}
                     self.repo.save_command(command)
                     self.repo.save_bulb_action(request["id"], "dispatched", target)
                     if not self.transport.publish("command", command):

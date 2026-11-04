@@ -6,6 +6,7 @@ this run; the model may only propose plans, which this test explicitly approves
 through the same REST API used by the React approval cards.
 """
 import json
+from hashlib import sha256
 import os
 from pathlib import Path
 import socket
@@ -33,6 +34,8 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mqtt-port", type=int, default=18884)
+    parser.add_argument("--light", action="store_true", help="Run the real-model light command instead of appliance planning")
+    parser.add_argument("--inspect", action="store_true", help="Keep the isolated UI available briefly for manual inspection")
     args = parser.parse_args()
 
     run_id = "copilot-live-" + uuid4().hex[:10]
@@ -128,6 +131,48 @@ def main():
         assert "home" in (agents.keys() if isinstance(agents, dict) else agents), info
         wait(lambda: all(item["fresh"] for item in client.get(api + "/api/home").json()["devices"].values()),
              "matter_device_feedback", 90)
+
+        if args.light:
+            prompt = "請把客廳燈調到 40% 暖光 2700K。"
+            payload = {"threadId": "home", "runId": run_id,
+                       "messages": [{"id": run_id + ":message", "role": "user", "content": prompt}],
+                       "state": {}, "tools": [], "context": []}
+            frames = []
+            with client.stream("POST", api + "/api/copilotkit/agent/home/run", json=payload,
+                               headers={"Accept": "text/event-stream"}, timeout=httpx.Timeout(180, connect=5)) as response:
+                assert response.status_code == 200, response.read().decode("utf-8", "replace")
+                for line in response.iter_lines():
+                    if line.startswith("data: "):
+                        frame = json.loads(line[6:])
+                        frames.append(frame)
+                        if frame.get("type") in {"RUN_FINISHED", "RUN_ERROR"}:
+                            break
+            assert frames and frames[-1].get("type") == "RUN_FINISHED", frames[-1:]
+            assert any(frame.get("toolCallName") == "render_light_card" for frame in frames), frames
+            request_id = sha256(f"{run_id}:bulb-1".encode()).hexdigest()
+            def confirmed():
+                response = client.get(api + "/api/requests/" + request_id, timeout=5)
+                if response.status_code != 200:
+                    return None
+                result = response.json()
+                if result["status"] == "error":
+                    raise AssertionError(result)
+                return result if (result.get("action") or {}).get("status") == "confirmed" else None
+            result = wait(confirmed, "light_action_confirmed_over_matter", 45)
+            state = client.get(api + "/api/home").json()["devices"]["bulb-1"]["state"]
+            assert state["power"] and state["level"] == 102 and state["mired"] == 370, state
+            assistant = client.get(api + "/api/assistant").json()
+            assert any(tool.get("function", {}).get("name") == "render_light_card"
+                       for message in assistant["messages"] for tool in message.get("toolCalls", [])), assistant
+            checks["light_card_restored_and_home_matches"] = True
+            summary = {"passed": True, "transport": "matter", "run_id": run_id,
+                       "request_id": request_id, "checks": checks, "directory": str(directory)}
+            (directory / "light-summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+            print(json.dumps(summary, ensure_ascii=False), flush=True)
+            if args.inspect:
+                print("INSPECT_URL=" + api, flush=True)
+                time.sleep(180)
+            return
 
         prompt = ("請分別為冷氣和洗衣提出各自的計畫：冷氣現在開始，目標 27°C，維持約一小時；"
                   "洗衣請在接下來 24 小時內安排一次標準洗程，遵守安靜時段。只建立待核准計畫，"

@@ -8,7 +8,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import App, { ProposalCard } from "./App";
+import App, { LightActionCard, ProposalCard } from "./App";
 import { useCommands } from "./api";
 import DevicePanel, { PlanForm } from "./DevicePanel";
 import {
@@ -31,6 +31,18 @@ vi.mock("./Scene", () => ({
     <div data-testid="scene" data-light={String(lightOn)} />
   ),
 }));
+
+it("shows confirmed light feedback and requested target in the conversation card", async () => {
+  const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response(JSON.stringify({
+    status: "done", result: "燈泡已達到設定並回報狀態",
+    action: { status: "confirmed" }, target: { power: true, brightness_percent: 40, kelvin: 2700 },
+  }), { status: 200, headers: { "Content-Type": "application/json" } }));
+  const view = render(<LightActionCard requestId="request-1" />);
+  expect(await screen.findByText("設備已確認")).toBeInTheDocument();
+  expect(screen.getByText(/亮度 40%/)).toHaveTextContent("色溫 2700K");
+  view.unmount();
+  fetchMock.mockRestore();
+});
 
 const stamp = "2026-10-18T06:00:00+00:00";
 function fixture(): Home {

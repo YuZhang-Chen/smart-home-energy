@@ -50,6 +50,25 @@ def test_agui_sse_replays_persisted_events_and_plan_tool(tmp_path):
     assert "id: " in output
 
 
+def test_light_card_is_replayed_and_restored(tmp_path):
+    repo = Repository(tmp_path / "light-card.db")
+    queue_run(repo, input_body(text="開燈"))
+    repo.submit("light-request", "set_bulb", {"device_id": "bulb-1", "power": True})
+    repo.add_assistant_reply("run-1", "等待設備回報")
+    repo.append_assistant_event("run-1", {"kind": "finished"})
+    repo.append_assistant_event("run-1", {"kind": "light_card", "tool_call_id": "light:1", "request_id": "light-request"})
+    repo.append_assistant_event("run-1", {"kind": "message_end"})
+    repo.append_assistant_event("run-1", {"kind": "done"})
+    repo.update_assistant_run("run-1", "completed")
+    output = "".join(event_stream(repo, "run-1"))
+    assert "render_light_card" in output and "light-request" in output
+    client = TestClient(create_app(repo=repo, hems=HemsSettings.from_env(), static_directory=tmp_path / "missing"))
+    messages = client.get("/api/assistant").json()["messages"]
+    assistant = next(message for message in messages if message["role"] == "assistant")
+    assert assistant["toolCalls"][0]["function"]["name"] == "render_light_card"
+    assert json.loads(assistant["toolCalls"][0]["function"]["arguments"]) == {"request_id": "light-request"}
+
+
 def test_v4_migration_recovers_streamlit_transcript_once(tmp_path):
     path = tmp_path / "legacy.db"
     repo = Repository(path)
