@@ -3,6 +3,51 @@
 記錄各版本的重要變更，最新版本放最上方。格式參考 [Sample CHANGELOG](https://gist.github.com/juampynr/4c18214a8eb554084e21d6e288a18a2c)，使用版本號、日期及 Added／Changed／Fixed 分類；版本 commit 以對應的 `v{版本號}:` 開頭。既有未編版紀錄保留原標題。
 
 
+## [1.4.0] - 2026-11-04
+
+將家庭助理整合至 React／CopilotKit，保留 Python／SQLite 的任務與設備執行路徑，並新增可獨立驗證的照明純規則及離線研究報告。對應 commit：`v1.4.0: migrate assistant to CopilotKit and add offline lighting research`。
+
+### Added
+
+- CopilotKit v2 Sidebar、Node Copilot Runtime 與 Python AG-UI 串流；FastAPI 提供同源代理、對話歷史與任務查詢。SQLite 遷移至 v4，保存對話、Agent 工作與可重播事件，並匯入舊對話紀錄。
+- React 用電紀錄、偏好／費率／展示時鐘及系統診斷頁，沿用持久化請求與背景 Controller。
+- P1 純照明規則、獨立 1／60 倍環境時鐘、模擬 presence、手動覆寫及可序列化狀態；規則不直接操作設備。
+- P2 離線情境執行器 `python -m smart_home_energy.research`，預設 17 個情境各 10 次，輸出逐次 JSON、統計 CSV 與 Markdown；包含樣本數、成功率、nearest-rank P50／P95，以及版本、工作區差異與執行環境資訊。
+- 對話服務、計畫卡與純規則／報告測試，opt-in 真實模型 CopilotKit→Matter 虛擬設備驗收腳本，以及專題總覽、驗收與待處理文件。
+- Python `uv.lock`，固定 AG-UI／CopilotKit 相依版本及前端鎖定檔。
+
+### Changed
+
+- 預設入口統一為 React／FastAPI 8502 與 Copilot Runtime 8503；啟動腳本改用 `-ApiPort`／`-RuntimePort`，保留 `-With3D` 相容參數。
+- Main／設備 Agent 可回報進度；對話、提案與家庭管理介面共用原有背景控制、核准及設備回報流程。
+- 助理計畫卡補上完整年月日、時間、溫度／洗衣限制、費率、費用上限與版本資訊；提供結構化修改及自然語言補充，載入最新版本後才能操作更新的計畫。
+
+### Removed
+
+- 舊 Streamlit 首頁、助理、監測與家電 UI 模組及其專屬測試；移除 Streamlit 相依，介面驗證轉至 React 與 API 測試。
+
+### Fixed
+
+- 家庭工作部分成功時保留成功設備的計畫卡，不再一律當成整體失敗。
+- 相同對話識別碼重送時統一前後空白處理，避免內容正規化差異造成衝突。
+- 提供明確費率來源更新請求；下載或資料格式異常時保留既有來源。
+
+### Validation
+
+- 2026-11-04 提交前檢查：Python 回歸 118 passed、3 skipped；React 22 tests passed；TypeScript、Runtime 型別檢查與 Vite 正式建置通過。略過項目為 opt-in 真實模型測試。
+- 2026-11-02：17 個離線規則情境各執行 10 次，共 170 次通過；CLI 測試封鎖 socket 建立，核對 JSON／CSV／Markdown 樣本及未量測指標。
+- 2026-11-02：隔離 Broker 的 MQTT、HTTP／MQTT 與 Matter 復原驗收通過，涵蓋核准、設備回報、斷線／重啟、去重、中止與故障解除；Matter 失聯不繞道 MQTT。未連接實體家電。
+- CopilotKit 真實 vLLM／Matter 虛擬雙設備流程沿用 2026-10-22 驗收證據；本次提交未重跑真實模型及 MQTT／Matter。
+
+### Known limitations
+
+- 照明純規則與離線研究框架已完成；Controller／REST／設定頁整合、燈泡手動／自動指令仲裁及新目標取代仍待實作。
+- SSE 逐訊框游標與對話完成交易／重啟恢復依使用者指示延後；部分卡片訊框仍共用游標，完成寫入中斷仍可能留下未結束對話。
+- 新版瀏覽器完整操作、375px、雙頁與啟停驗收尚未全部完成；前端建置仍有大型 chunk 提示。P0–P2 整體未宣告通過。
+- 離線耗時僅代表純規則情境；不代表模型回覆、設備確認或聊天恢復延遲。未量測指標記為空值，完整驗收狀態維持 incomplete。
+
+操作與證據見 [家庭助理](docs/ASSISTANT_UI.md)、[離線照明規則](docs/OFFLINE_LIGHTING.md)、[驗收紀錄](docs/ACCEPTANCE_2026-11-02.md)及[待處理工作](docs/PENDING_WORK.md)。
+
 ## [1.3.0] - 2026-10-22
 
 新增智慧燈泡的手動／自然語言控制、MQTT 狀態同步與 Matter 橋接，並明確限制各 Agent 的設備權責。對應 commit：`v1.3.0: add smart bulb control with Matter and scoped Light Agent`。

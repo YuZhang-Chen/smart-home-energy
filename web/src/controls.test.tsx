@@ -8,7 +8,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import App from "./App";
+import App, { ProposalCard } from "./App";
 import { useCommands } from "./api";
 import DevicePanel, { PlanForm } from "./DevicePanel";
 import {
@@ -20,6 +20,12 @@ import {
   type Task,
 } from "./types";
 
+vi.mock("@copilotkit/react-core/v2", () => ({
+  CopilotSidebar: () => null,
+  useConfigureSuggestions: () => undefined,
+  useRenderTool: () => undefined,
+}));
+
 vi.mock("./Scene", () => ({
   default: ({ lightOn }: { lightOn: boolean }) => (
     <div data-testid="scene" data-light={String(lightOn)} />
@@ -30,7 +36,6 @@ const stamp = "2026-10-18T06:00:00+00:00";
 function fixture(): Home {
   return {
     server_time: stamp,
-    assistant_url: "http://127.0.0.1:8501",
     clock: { now: stamp, clock_id: "clock", speed: 1 },
     preferences: {
       target_c: 27,
@@ -159,6 +164,22 @@ describe("telemetry and animation contract", () => {
 });
 
 describe("planning and approval", () => {
+  it("shows the latest plan only after review and permits editing before approval", async () => {
+    const home = fixture();
+    const constraints = { start: stamp, end: "2026-10-18T07:00:00+00:00", target_c: 27, minimum_c: 26, maximum_c: 28, ambient_c: 32, warming_seconds: 1800, device_id: "ac-1" as const };
+    const task: Task = { task_id: "card", device_id: "ac-1", version: 2, status: "pending", message: "", run_id: null, constraints: null, ac_constraints: constraints, plan: null, ac_plan: { constraints, energy_kwh: 0.5, cost: 3, tariff: { official: null }, comfortable_after_seconds: 0, start_on_approval: false } };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => task }));
+    const submit = vi.fn();
+    render(<ProposalCard taskId="card" version={1} home={home} submit={submit} busy={false} />);
+    expect(await screen.findByText(/計畫已更新/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "確認計畫" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "載入最新版本" }));
+    expect(screen.getByText(/目標 27°C/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "修改計畫" }));
+    expect(screen.getByLabelText("自然語言補充")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "確認計畫" }));
+    expect(submit).toHaveBeenCalledWith("approve", { task_id: "card", expected_version: 2 });
+  });
   it("retains edited AC fields across polling and submits Taipei times", () => {
     const home = fixture(),
       submit = vi.fn();
@@ -366,6 +387,7 @@ describe("accessible scene controls", () => {
     );
     const user = userEvent.setup();
     render(<App />);
+    await user.click(await screen.findByRole("button", { name: /冷氣/ }));
     await screen.findByLabelText("開始時間");
     const list = screen.getByRole("region", { name: "客廳設備清單" });
     expect(list.querySelectorAll("button")).toHaveLength(6);
@@ -407,6 +429,7 @@ describe("accessible scene controls", () => {
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
     render(<App />);
+    await user.click(await screen.findByRole("button", { name: /冷氣/ }));
     await screen.findByLabelText("開始時間");
     await user.click(screen.getByRole("button", { name: /智慧燈泡 燈光已開啟/ }));
     const bulb = screen.getByRole("switch", { name: "客廳燈泡" });

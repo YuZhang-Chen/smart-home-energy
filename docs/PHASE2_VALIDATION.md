@@ -65,7 +65,7 @@ Matter 另驗證同一命令 ID 搭配不同上下文被拒絕、原持久化結
 
 ## 瀏覽器、啟停與來源
 
-以 `start.ps1 -NoBroker -Transport matter -DashboardPort 8505 -RuntimeDirectory artifacts/script-validation/runtime` 實際啟動五個程序。瀏覽器提交冷氣表單、確認計畫／達標時間／估價、獨立核准，畫面顯示已排程；最後取消並確認無未完成冷氣任務。截圖：`artifacts/script-validation/approved-ac.png`。
+舊版 UI 驗收時以 Matter 傳輸和隔離連接埠驗證冷氣表單、提案、核准及取消流程。此紀錄保留為遷移前設備控制證據；目前入口已統一為 React／FastAPI 8502 與 Copilot Runtime 8503，啟動參數使用 `-ApiPort` 與 `-RuntimePort`。
 
 `stop.ps1` 以相同 RuntimeDirectory 清理相符程序與子程序；查核後沒有該測試的 Python／Node 程序。SQLite 與驗收輸出保留。
 

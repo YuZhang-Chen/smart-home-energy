@@ -1,22 +1,24 @@
 # 第二階段操作指南
 
-更新：2026-10-17（Asia/Taipei）。此版包含 Main → Washer / AC Agent、獨立核准、可控冷氣、住宅增量費用與真實 Matter 橋接。驗收證據見 [PHASE2_VALIDATION.md](PHASE2_VALIDATION.md)。
+更新：2026-10-22（Asia/Taipei）。本版包含 Main → Washer／AC／Light Agent、獨立核准、CopilotKit React SPA、持久化 AG-UI 對話、可控冷氣、住宅增量費用與 Matter 橋接。舊階段驗收證據見 [PHASE2_VALIDATION.md](PHASE2_VALIDATION.md)。
 
-介面已改為對話、快捷按鈕與同頁計畫卡，最短流程見 [ASSISTANT_UI.md](ASSISTANT_UI.md)。
+家庭助理由右側 CopilotKit Sidebar 提供，任務計畫可在聊天中核准；3D 設備抽屜、用電、偏好與診斷位於同一個 React SPA。操作流程見 [ASSISTANT_UI.md](ASSISTANT_UI.md)。
 
 ## 啟動
 
-需求為 Python 3.12+、Docker Desktop；Matter 模式另需 Node.js 22+。保留既有 `.env`、SQLite 與 Matter 配對目錄，新設定參考 `.env.example`。
+需求為 Python 3.12+、Node.js 22.15+、Docker Desktop。保留既有 `.env`、SQLite 與 Matter 配對目錄，新設定參考 `.env.example`。
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install -e .
+.\.venv\Scripts\python.exe -m pip install -e ".[web]"
+npm.cmd ci --prefix web
+npm.cmd run build --prefix web
 npm.cmd ci --prefix matter
 .\scripts\start.ps1 -Transport matter
 ```
 
-開啟 [本機儀表板](http://127.0.0.1:8501)，直接輸入需求或點快捷按鈕。首次配對可能需要數十秒，日誌在 `artifacts/runtime/`。`-Transport mqtt` 為預設；Matter 驗收須選 `matter`。已有 Broker 時加 `-NoBroker`。測試可指定 `-DashboardPort 8505 -RuntimeDirectory artifacts/my-demo/runtime`；停止時使用相同 RuntimeDirectory。
+開啟 [家庭入口](http://127.0.0.1:8502)。首次配對可能需要數十秒，日誌在 `artifacts/runtime/`。`-Transport mqtt` 為預設；已有 Broker 時加 `-NoBroker`。API／Runtime 可用 `-ApiPort`／`-RuntimePort` 設定；停止時使用相同 RuntimeDirectory。
 
-啟動腳本只啟動一個可控冷氣程序 `smart_home_energy.ac`，它也發布相容的舊監測資料。請勿同時啟動舊 `publisher`。MQTT 模式有 ac、washer、control、dashboard 四個背景程序；Matter 多一個 Node bridge，Node controller 由 control 管理。
+啟動腳本只啟動一個可控冷氣程序 `smart_home_energy.ac`，它也發布監測資料。請勿同時啟動舊 `publisher`。MQTT 模式啟動 ac、washer、bulb、control、FastAPI 與 Copilot Runtime；Matter 模式另啟動 Node bridge。
 
 ```powershell
 .\scripts\stop.ps1

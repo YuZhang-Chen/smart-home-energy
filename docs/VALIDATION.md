@@ -1,56 +1,52 @@
-# PoC 驗收紀錄
+# CopilotKit 遷移驗收
 
-驗收日期：2026-10-16（Asia/Taipei）。
+2026-11-02 的目前工作目錄驗收與 MQTT／Matter 復原重驗，見 [P0–P2 驗收紀錄](ACCEPTANCE_2026-11-02.md)。以下保留 2026-10-22 的歷史結果。
 
-## 執行環境
-
-- Windows、Python 3.12.13，使用專案既有 `.venv`。
-- Paho MQTT 2.1.0、Streamlit 1.66.0、python-dotenv 1.2.4。
-- Docker Desktop 4.55.0、Docker Engine 29.1.3，Linux containers。
-- 官方 `eclipse-mosquitto:2` 容器，僅綁定 `127.0.0.1:1883`。
-- `pip install -e .` 安裝成功；`pip check` 沒有依賴衝突。
+驗收日期：2026-10-22（Asia/Taipei）。遷移驗收另補上真實 vLLM、隔離 MQTT Broker 與 Matter bridge 的端到端測試；沒有操作實體家庭設備。
 
 ## 自動測試
 
-`python -m unittest discover -s tests -v`：**22 項全部通過**（含 `.env` 設定調整後複驗）。
+- Python：`python -m pytest tests -q`，**83 passed、3 skipped**。略過項目需要明確啟用真實模型或長流程 Agent 整合。
+- React：`npm.cmd test --prefix web`，**21 tests passed**。
+- 前端正式建置：`npm.cmd run build --prefix web`，TypeScript、Runtime 型別檢查及 Vite 建置通過。
+- Runtime 型別檢查：`npm.cmd run check:runtime --prefix web` 通過。
 
-覆蓋冷氣溫度收斂與功率上下限、實際時間積分、不變的原始模型狀態、JSON 與 UTC 時間、錯誤資料與設定、有界歷史、過期判定、重新訂閱及離線不排隊。Streamlit AppTest 驗證等待畫面、數字格式、過期提示，以及重繪後只有一個訂閱端。
+測試使用專案 `.venv`、假模型與隔離 SQLite。Windows 系統暫存目錄不可寫時，測試暫存改放在 `artifacts/test-tmp/`。
 
-設定測試另驗證 `.env` 載入、既有環境變數優先、檔案缺失與必要欄位缺漏時的錯誤訊息。實際專案 `.env` 已成功載入，`pip check` 沒有依賴衝突。
+## 本機 HTTP 與 SSE
 
-圖表首次載入可能超過 AppTest 預設的 3 秒，畫面測試使用 15 秒上限。AppTest 在獨立執行時可能輸出 `missing ScriptRunContext` 提示，測試結果仍為通過。
+以暫存資料庫在本機 18502／18503 啟動 FastAPI 與 Copilot Runtime，確認：
 
-## 真實 MQTT 驗收
+- Runtime `/api/copilotkit/info` 可探索 `home` Agent，並透過 FastAPI `/api/copilotkit/info` 同源代理讀取。
+- 由同源 `/api/copilotkit/agent/home/run` 送出 AG-UI 工作，收到 `text/event-stream`、`RUN_STARTED` 及排隊進度事件。
+- 使用者訊息與工作 ID 寫入 Python／SQLite；重新查詢 `/api/assistant` 可恢復訊息及目前執行狀態。
+- `/api/diagnostics` 回報 Copilot Runtime 在線。隔離驗收未啟動背景 Controller，因此其狀態如預期顯示離線。
 
-執行 `python tests/mqtt_smoke.py --recovery`，結果為 **passed**：
+此煙霧測試驗證代理與串流傳輸；Agent 工作只送入隔離佇列，沒有呼叫真實模型或設備。
 
-| 項目 | 實測結果 |
-| --- | --- |
-| 連續收集時間 | 30.00 秒 |
-| 收到筆數 | 15 筆 |
-| 最短資料間隔 | 2.001676 秒 |
-| 最長資料間隔 | 2.009399 秒 |
-| Broker 延後啟動 | 自動連線並開始接收 |
-| 錯誤 JSON | 記錄警告，後續有效資料正常接收 |
-| Broker 停止再啟動 | 自動重連並恢復訂閱，累積用電持續增加 |
-| 離線資料 | 序號跨越 3，沒有補送舊快照 |
-| 模擬器重新啟動 | 新 run_id、用電重新累積、歷史只保留新一輪 |
+## CopilotKit、真實模型與 Matter 端到端
 
-完整數據由測試產生於 `artifacts/mqtt-smoke.json`，每次執行會更新。
+以 `.env` 中設定的 vLLM 及隔離資料庫、MQTT topic、Matter fabric 執行 `tests/copilotkit_live_smoke.py`，完整通過：
 
-## 實際瀏覽器檢查
+- Copilot Runtime discovery、FastAPI 同源代理、AG-UI SSE、Python 對話與 Agent 狀態持久化。
+- vLLM 經 Main Agent 分別委派 Washer／AC Agent，產生兩張各自待核准的提案卡；核准前 command queue 為空。
+- 透過版本化 `schedule_form`／`schedule_ac_form` 修改計畫，再逐一經 REST 核准；驗證修改後版本及費用上限。
+- 兩項設備命令經 Matter controller／bridge 傳輸到隔離虛擬設備。冷氣與洗衣收到回報並完成，`/api/home` 讀回相同 run ID 與設備狀態。
 
-已在 Codex 瀏覽器開啟 `http://127.0.0.1:8501`，確認 Broker 已連線、數字持續更新、功率曲線顯示及 Asia/Taipei 時間換算。
+詳細機器可讀摘要：`artifacts/copilotkit-live-smoke.json`；本次實際執行目錄：`artifacts/copilot-live-861a464536/`。先啟動隔離 Broker（`127.0.0.1:18884`），再重跑：
 
-核對同一畫面的資料範例：
+```powershell
+docker run --detach --name hems-copilot-e2e --publish 127.0.0.1:18884:1883 --mount "type=bind,source=$((Resolve-Path .\mosquitto\mosquitto.conf).Path),target=/mosquitto/config/mosquitto.conf,readonly" eclipse-mosquitto:2
+.venv\Scripts\python.exe tests\copilotkit_live_smoke.py --mqtt-port 18884
+docker rm --force hems-copilot-e2e
+```
 
-| 欄位 | 原始 MQTT 值 | 網頁顯示 |
-| --- | --- | --- |
-| temperature_c | 29.5719232242695 | 29.57 °C |
-| power_w | 871.5769672808502 | 871.6 W |
-| energy_kwh | 0.024005650779076865 | 0.024006 kWh |
-| timestamp | 2026-10-16T11:58:16.747422Z | 2026-10-16 19:58:16 |
+此 opt-in 測試會呼叫已設定的真實模型並透過 React 所用的 REST 核准路徑執行虛擬 Matter 設備；不連接實體冷氣、洗衣機或燈泡。
 
-窄版畫面已將單位放入指標標籤，避免用電數字遭截斷。驗收截圖位於 `artifacts/dashboard.jpg`。
+## MQTT 與 Matter 設備驗收
 
-本次驗收只針對教學用冷氣模型與本機監測資料流，沒有評估真實冷氣效率或節能效果。
+- `tests/api_mqtt_smoke.py --port 18884 --recovery --broker-container hems-phase2-copilot-20261022` 通過：API 提案／核准、三設備回報、Broker 中斷與復原、冷氣／洗衣完成、避免重複啟動，以及人工中止。
+- `tests/phase2_smoke.py --transport mqtt --recovery --broker-container hems-phase2-copilot-20261022` 通過燈泡控制、雙設備運轉、Broker 復原、行程完成、人工中止與故障復歸。
+- `tests/phase2_smoke.py --transport matter --recovery --broker-container hems-phase2-copilot-20261022` 通過相同 Matter 實測，另驗證 Matter controller／bridge 重啟、失聯偵測、拒絕竄改重複命令及無 MQTT 旁路。兩台設備用電回報為 0.225 kWh。
+
+上述傳輸測試使用本機隔離 Broker 和專案內的 Matter／設備模擬端點，覆蓋真實協定堆疊與服務流程；它們沒有連到實體 Matter 或 MQTT 家電。先前完整的歷史驗收另見 [第二階段驗收](PHASE2_VALIDATION.md) 及 [Main Agent 驗收](MAIN_AGENT_VALIDATION.md)。

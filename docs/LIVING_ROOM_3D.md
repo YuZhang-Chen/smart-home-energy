@@ -1,85 +1,70 @@
-# 3D 智慧客廳
+# 3D 智慧客廳與家庭助理
 
-React Three Fiber 的本機客廳入口保留原有 Streamlit 家庭助理。冷氣、洗衣機連接既有虛擬設備；計畫經使用者核准後，由原本的控制服務透過 MQTT 或 Matter 執行。
+React Three Fiber 場景與 CopilotKit v2 Sidebar 共用一個 Vite React SPA。冷氣、洗衣機與燈泡繼續使用既有 Python Agent、Controller、SQLite 與 MQTT／Matter；CopilotKit Runtime 以 AG-UI 轉接，不執行第二套設備邏輯。
 
 ## 安裝與啟動
 
-需求與原專案相同，前端另需 Node.js 22.12 以上（建議 Node 22 LTS）。首次在專案根目錄執行：
+需求為 Python 3.12+、Node.js 22.15+ 與 Docker Desktop。Matter 模式另需 `matter` 目錄的 Node 相依套件。首次在專案根目錄執行：
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install -e ".[web]"
+.\.venv\Scripts\python.exe -m pip install -e ".[web,test]"
 npm.cmd ci --prefix web
 npm.cmd run build --prefix web
-.\scripts\start.ps1 -With3D
+.\scripts\start.ps1
 ```
 
-開啟 [3D 智慧客廳](http://127.0.0.1:8502)。原有[家庭助理](http://127.0.0.1:8501)保留。程式僅監聽本機，沒有對外部署。
+開啟 [家庭入口](http://127.0.0.1:8502)。React 與 FastAPI 共用 8502；FastAPI 將 `/api/copilotkit/*` 同源代理至本機 Copilot Runtime 8503。兩個入口只綁定本機。
 
-Matter 模式使用 `./scripts/start.ps1 -With3D -Transport matter`，原有 Matter 安裝與配對前提仍適用。若已有啟動紀錄，先以原本的 `stop.ps1` 結束舊服務，再重新啟動；運轉中任務請先在介面完成停止，避免設備重啟被記為故障。
+Matter 模式執行 `npm.cmd ci --prefix matter` 後使用 `.\scripts\start.ps1 -Transport matter`。已有 Broker 時可加 `-NoBroker`。`-With3D` 保留作為相容參數，現在預設即啟動 React、API 與 Runtime。
 
-`-LivingRoomPort 8502` 可以調整新入口的連接埠，不可與 `-DashboardPort` 相同。頁面頂端助理連結會跟隨 `-DashboardPort`；單獨啟動 API 時，可用 `HEMS_DASHBOARD_PORT` 設定，預設為 8501。
-
-停止全部程序：
+可用 `-ApiPort`、`-RuntimePort` 修改服務連接埠；Runtime 的 Python Agent URL 會隨 API 連接埠同步調整。停止全部服務：
 
 ```powershell
 .\scripts\stop.ps1 -StopBroker
 ```
 
-API 程序與其他服務共用啟動紀錄、程序識別核對與日誌目錄。未指定 `-With3D` 時，原有啟動方式不變。
+程序紀錄與服務日誌位於 `artifacts/runtime/`。停止腳本先核對程序 ID、執行檔與啟動時間，再停止本次啟動的程序；SQLite 與 Matter 配對資料會保留。
 
 ## 操作
 
-- 拖曳旋轉、滾輪縮放，或以觸控旋轉／雙指縮放。右下角按鈕重設 45° 視角。
-- 場景下方的「客廳時光」提供真實時間、手動時間及加速模擬。手動時間可拖曳時間軸或用方向鍵逐分鐘調整；加速模擬以 120 秒循環展示 24 小時，可暫停、繼續或從午夜重播。場景自然光、天空色調與投影會隨展示時間變化。
-- 點擊場景家電或下方六個設備按鈕；設備清單支援 Tab、Enter、Space。
-- 冷氣設定時段、目標溫度及舒適範圍；洗衣設定最早開始、最晚完成及可跨夜的安靜時段。時間均為 Asia/Taipei，預設時間來自後端邏輯時鐘。
-- 「計算並提出計畫」只產生提案。核對費率估算、起訖與條件後，按核准才會排程執行；可在允許狀態修改、取消，運轉中停止需再次確認。
-- 狀態未知或故障可重新查核；人工確認設備後再解除。失聯不代表已停止。
-- 冷氣、洗衣機動畫必須有新鮮且任務／運轉識別碼相符的回報。超過十個真實秒未回報會停止動畫、保留數值並標記過期。能源、費用與進度都直接使用後端數據。
-- 智慧燈泡是本頁展示：開關會改變 3D 光源，重新整理後恢復開啟，不新增 MQTT 設備。晝夜循環只控制自然光，不會替使用者開關燈泡。電視、窗簾、電風扇僅提供場景資訊；點擊右側電風扇或設備清單的電風扇按鈕會選取同一項設備。電風扇維持靜態模型，尚未串接設備服務。
-- 真實時間使用瀏覽器本機時區；設備排程仍使用 Asia/Taipei 與後端邏輯時鐘。每次載入預設為真實時間。
-- WebGL 無法使用時仍可使用 HTML 設備清單與面板。系統設定減少動態效果時，停用連續設備動畫與燈光過渡。
+- 拖曳旋轉、滾輪縮放，或以觸控旋轉／雙指縮放；右下按鈕重設 45° 視角。
+- 場景下方控制晝夜展示時間。此展示時鐘只改變自然光與天空，不會自動操作設備。
+- 點擊場景設備或設備清單會開啟左側操作抽屜。冷氣與洗衣表單、燈泡控制沿用原有 REST 請求與設備回報。
+- 右側家庭助理可輸入多設備需求。冷氣與洗衣計畫各自核准；燈泡操作要等設備狀態回報後才顯示完成。
+- 設備動畫只使用新鮮且任務／運轉識別碼吻合的後端回報。超過十秒未回報會停止動畫、保留數值並標示過期。
+- 行動版設備抽屜與家庭助理互斥；Escape 可關閉抽屜並將焦點交還觸發按鈕。375px 寬度維持單欄。
 
-## 前端開發
+頂部導覽包含客廳、用電紀錄、偏好設定與系統診斷。用電頁讀取最近 900 筆功率樣本、家庭已核准負載費用與近期任務；偏好頁包含冷氣／洗衣預設、費率方案、逐月基準、費率來源更新與展示時鐘；診斷頁顯示服務、請求、Agent、工具、設備命令與稽核紀錄。
+
+## HTTP／AG-UI 介面
+
+API 文件：[http://127.0.0.1:8502/api/docs](http://127.0.0.1:8502/api/docs)。
+
+- `GET /api/assistant`：單一家庭對話訊息、工作狀態與已保存計畫卡。
+- `POST /api/assistant/ag-ui`：驗證 AG-UI `RunAgentInput`、持久化使用者訊息與工作，回傳 SSE。
+- `GET /api/assistant/runs/{id}/events?after=N`：依 SQLite 事件序號重播及續接串流。
+- `GET /api/tasks/{id}`：查詢任務目前版本，核准前後端皆驗證版本。
+- `GET /api/energy`、`/api/settings`、`/api/diagnostics`：用電、偏好／費率／時鐘與診斷讀取模型。
+- CopilotKit `/api/copilotkit/*`：由 FastAPI 反向代理到 8503 Runtime，前端維持同源連線。
+
+`POST /api/requests` 回傳 202 只代表請求入列；以 `GET /api/requests/{request_id}` 查詢處理結果，並以設備狀態回報確認實際執行。背景工作不依賴瀏覽器連線持續執行。
+
+## 開發與驗收
+
+開發時分別啟動既有 Broker／設備／Control，接著執行 API、Runtime 與 Vite：
 
 ```powershell
-# 一個視窗：API，可獨立啟動；不會自動啟動控制器或模擬器
-.\.venv\Scripts\python.exe -m smart_home_energy.api
-# 另一個視窗：Vite，/api 代理到 127.0.0.1:8502
+.\.venv\Scripts\python.exe -m smart_home_energy.api --port 8502
+npm.cmd run runtime --prefix web
 npm.cmd run dev --prefix web
 ```
 
-只有場景與燈泡展示不依賴 Broker。要計算、核准及執行計畫，仍需既有 `ac`、`washer` 與 `control` 服務。不要重複啟動同一個 API；`start.ps1 -With3D` 已包含 API。
-
-API 文件位於 [本機 API 文件](http://127.0.0.1:8502/api/docs)。`GET /api/home` 提供時鐘、偏好、行程、設備回報、目前／最近任務。`POST /api/requests` 僅接受計畫建立／修改、核准、取消、中止、查核與解除異常，回傳 202 代表入列，不能當成設備動作成功。以 `GET /api/requests/{request_id}` 查詢處理結果，再以設備回報確認執行。
-
-同一次提交的重試使用相同請求識別碼，衝突識別碼或舊任務版本回傳 409。後端拒絕非法條件與未允許的請求種類；正式費率報價過期等領域錯誤由既有控制器回報。前端不直接操作 MQTT 或資料庫。
-
-## 檢查
+正式檢查：
 
 ```powershell
-npm.cmd run build --prefix web
 npm.cmd test --prefix web
-.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+npm.cmd run build --prefix web
+.\.venv\Scripts\python.exe -m pytest
 ```
 
-API 測試使用暫存 SQLite 與假傳輸，不讀寫日常任務；MQTT 驗收也須使用隔離資料庫與主題，避免干擾既有展示。
-
-完整 HTTP／MQTT 驗收使用專用容器（PowerShell，專案根目錄）：
-
-```powershell
-docker run -d --name hems-phase2-3d-test -p 127.0.0.1:18884:1883 --mount "type=bind,source=$((Get-Location).Path)\mosquitto\mosquitto.conf,target=/mosquitto/config/mosquitto.conf,readonly" eclipse-mosquitto:2
-.\.venv\Scripts\python.exe tests/api_mqtt_smoke.py --recovery --broker-container hems-phase2-3d-test
-docker rm -f hems-phase2-3d-test
-```
-
-驗收使用獨立 SQLite、MQTT 主題與自動選取的 API 連接埠，啟動真實 `washer`、`ac`、`control`、`api` 程序。檢查未核准不啟動、雙設備運轉、Broker 斷線後回報過期、重新連線保留原行程、自然完成、請求去重及人工中止。只重啟明確指定的 `hems-phase2-*` 測試容器；結果保存在 `artifacts/3d-api-mqtt-smoke.json`，所有測試子程序會在結束時清理。
-
-### 2026-10-18 驗證結果
-
-- 正式前端建置成功；前端 8 項互動測試通過。
-- Python 共 81 項測試：79 項通過，2 項需另行啟用的真實模型測試略過。
-- Docker Mosquitto 上的 HTTP／MQTT 完整流程通過，含 Broker 中斷超過十秒與原行程恢復。
-- `start.ps1 -With3D` 與 `stop.ps1` 實測包含五個服務的啟停；API／前端、Streamlit 健康檢查皆為 HTTP 200，自訂助理連接埠可正確連結。
-- 瀏覽器確認 3D 模型渲染、直接點擊洗衣機、旋轉不誤選、浮動名稱、燈泡開關及表單產生待核准卡片。375px 寬度改為單欄，無橫向溢位。
-- 畫面保存在 `artifacts/living-room-desktop.png`、`artifacts/living-room-mobile.png`；Python 完整輸出在 `artifacts/3d-python-tests.log`。此輪新增介面的端到端驗收使用 MQTT；Matter 沿用既有傳輸與控制流程，未在本輪另做完整配對測試。
+測試以假模型、暫存 SQLite 與假傳輸為主。真實模型及 MQTT／Matter 驗收應使用隔離設定，避免干擾日常任務。

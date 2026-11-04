@@ -3,9 +3,11 @@ from dataclasses import replace
 from datetime import timedelta
 import importlib.util
 import json
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 WEB_AVAILABLE = importlib.util.find_spec("fastapi") is not None
 if WEB_AVAILABLE:
@@ -72,7 +74,9 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(self.client.post('/api/requests', json=body).status_code, 202)
         self.assertEqual(len(self.repo.recent_tasks()), 1)
         altered = {**body, 'kind': 'clock', 'payload': {'speed': 60}}
-        self.assertEqual(self.client.post('/api/requests', json=altered).status_code, 422)
+        # `clock` is now a supported durable request kind; reusing the original
+        # identifier with different content must report the idempotency conflict.
+        self.assertEqual(self.client.post('/api/requests', json=altered).status_code, 409)
         context = {'task_id': task.task_id, 'expected_version': task.version, 'max_cost': task.plan.cost}
         request = {'request_id': 'approve', 'kind': 'approve', 'payload': context}
         self.assertEqual(self.client.post('/api/requests', json=request).status_code, 202)
@@ -127,6 +131,15 @@ class ApiTests(unittest.TestCase):
             self.assertEqual(client.get('/app.js').status_code, 200)
             self.assertEqual(client.get('/api/home').status_code, 200)
             self.assertEqual(client.get('/api/does-not-exist').status_code, 404)
+
+    def test_runtime_proxy_failure_and_diagnostics_are_explicit(self):
+        with patch.dict(os.environ, {'HEMS_COPILOT_RUNTIME_URL': 'http://127.0.0.1:1'}):
+            with TestClient(create_app(self.repo, self.hems, self.directory / 'no-build')) as client:
+                self.assertEqual(client.get('/api/copilotkit/info').status_code, 503)
+                services = client.get('/api/diagnostics').json()['services']
+                self.assertEqual(services['api'], 'online')
+                self.assertEqual(services['copilot_runtime'], 'offline')
+                self.assertEqual(services['controller'], 'offline')
 
     def test_bulb_request_uses_same_durable_queue_and_confirmed_feedback(self):
         bulb = VirtualBulb(Repository(self.directory / 'bulb.db'), self.real)

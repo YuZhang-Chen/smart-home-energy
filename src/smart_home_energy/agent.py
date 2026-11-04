@@ -259,6 +259,50 @@ def agent_worker(repo: Repository, hems: HemsSettings, stopped):
         event = repo.claim_event()
         if event:
             from smart_home_energy.multi_agent import run_household
-            asyncio.run(run_household(repo, event, hems))
+            root_id = event.payload.get("root_id")
+            assistant_run = repo.assistant_run_by_root(root_id) if root_id else None
+            if assistant_run:
+                repo.update_assistant_run(assistant_run["id"], "running")
+                repo.append_assistant_event(assistant_run["id"], {"kind": "progress", "text": "Agent 已開始分析需求"})
+            try:
+                run = asyncio.run(run_household(repo, event, hems, progress=(
+                    (lambda text: repo.append_assistant_event(assistant_run["id"], {"kind": "progress", "text": text}))
+                    if assistant_run else None)))
+            except Exception as error:
+                # A worker failure is durable and visible; it must not strand a run forever.
+                repo.finish_event(event.event_id)
+                if assistant_run:
+                    safe_message = "家庭助理執行時發生錯誤，請查看診斷紀錄或改用設備表單。"
+                    repo.add_assistant_reply(assistant_run["id"], safe_message)
+                    repo.append_assistant_event(assistant_run["id"], {"kind": "finished"})
+                    repo.append_assistant_event(assistant_run["id"], {"kind": "content", "text": safe_message})
+                    repo.append_assistant_event(assistant_run["id"], {"kind": "message_end"})
+                    repo.append_assistant_event(assistant_run["id"], {"kind": "error", "text": safe_message})
+                    repo.update_assistant_run(assistant_run["id"], "failed", safe_message)
+                continue
+            if assistant_run:
+                status = run.status if run.status in {"completed", "needs_details", "partial_success"} else "failed"
+                repo.add_assistant_reply(assistant_run["id"], run.message)
+                repo.append_assistant_event(assistant_run["id"], {"kind": "finished"})
+                if status != "failed":
+                    with repo.transaction() as db:
+                        delegated = db.execute("SELECT device_id,task_id FROM delegations WHERE root_id=? AND task_id IS NOT NULL ORDER BY rowid", (root_id,)).fetchall()
+                    existing = repo.assistant_events(assistant_run["id"], 0)
+                    sent = {row["payload"].get("task_id") for row in existing if row["payload"].get("kind") == "task_card"}
+                    for item in delegated:
+                        try:
+                            task = repo.task(item["task_id"])
+                        except ValueError:
+                            continue
+                        if task.task_id in sent or not (task.plan or task.ac_plan):
+                            continue
+                        repo.append_assistant_event(assistant_run["id"], {
+                            "kind": "task_card", "tool_call_id": f"plan:{task.task_id}:{task.version}",
+                            "task_id": task.task_id, "version": task.version, "device_id": task.device_id,
+                        })
+                repo.append_assistant_event(assistant_run["id"], {"kind": "content", "text": run.message})
+                repo.append_assistant_event(assistant_run["id"], {"kind": "message_end"})
+                repo.append_assistant_event(assistant_run["id"], {"kind": "error" if status == "failed" else "done", "text": run.message})
+                repo.update_assistant_run(assistant_run["id"], status, run.message)
         else:
             stopped.wait(.5)

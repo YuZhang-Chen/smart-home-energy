@@ -65,7 +65,8 @@ class Repository:
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         self.local = threading.local()
         with self.transaction() as db:
-            if db.execute("PRAGMA user_version").fetchone()[0] > 3:
+            old_version = db.execute("PRAGMA user_version").fetchone()[0]
+            if old_version > 4:
                 raise ValueError("資料庫版本較新，拒絕降版")
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -94,7 +95,63 @@ class Repository:
             db.execute("CREATE TABLE IF NOT EXISTS delegations(id TEXT PRIMARY KEY, root_id TEXT NOT NULL, device_id TEXT NOT NULL, task_id TEXT, data TEXT NOT NULL)")
             db.execute("CREATE TABLE IF NOT EXISTS energy_segments(device_id TEXT, boot_id TEXT, sequence INTEGER, task_id TEXT, run_id TEXT, start TEXT, end TEXT, power_w REAL, PRIMARY KEY(device_id,boot_id,sequence))")
             db.execute("CREATE TABLE IF NOT EXISTS bulb_actions(id TEXT PRIMARY KEY, request_id TEXT UNIQUE, status TEXT NOT NULL, data TEXT NOT NULL, created TEXT NOT NULL, updated TEXT NOT NULL)")
-            db.execute("PRAGMA user_version=3")
+            db.execute("CREATE TABLE IF NOT EXISTS assistant_messages(id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, created TEXT NOT NULL)")
+            db.execute("CREATE INDEX IF NOT EXISTS assistant_messages_thread ON assistant_messages(thread_id, created)")
+            db.execute("CREATE TABLE IF NOT EXISTS assistant_runs(id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, message_id TEXT NOT NULL, root_id TEXT NOT NULL UNIQUE, status TEXT NOT NULL, response TEXT, created TEXT NOT NULL, updated TEXT NOT NULL)")
+            db.execute("CREATE TABLE IF NOT EXISTS assistant_events(sequence INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, payload TEXT NOT NULL, created TEXT NOT NULL)")
+            db.execute("CREATE INDEX IF NOT EXISTS assistant_events_run ON assistant_events(run_id, sequence)")
+            if old_version < 4:
+                self._import_legacy_conversation(db)
+            db.execute("PRAGMA user_version=4")
+
+    @staticmethod
+    def _import_legacy_conversation(db):
+        """Recover the old Streamlit transcript from durable request/run records once."""
+        from datetime import datetime, timedelta
+        rows = db.execute("SELECT id,kind,payload,status,result,created FROM requests WHERE kind IN ('create_household','details') ORDER BY rowid").fetchall()
+        for row in rows:
+            try:
+                payload = json.loads(row["payload"])
+            except (TypeError, json.JSONDecodeError):
+                continue
+            text = payload.get("text")
+            if not isinstance(text, str) or not text.strip():
+                continue
+            if row["kind"] == "create_household":
+                root_id = str(payload.get("root_id") or row["id"])
+                key = "household:" + root_id
+            else:
+                root_id = "legacy-" + str(row["id"])
+                key = f"requirement:{payload.get('task_id')}:{int(payload.get('expected_version', 0)) + 1}"
+            event = db.execute("SELECT id,status,payload FROM events WHERE key=? ORDER BY rowid DESC LIMIT 1", (key,)).fetchone()
+            run = db.execute("SELECT data FROM agent_runs WHERE id IN (SELECT id FROM agent_runs) ORDER BY rowid DESC").fetchall()
+            match = None
+            for agent_row in run:
+                try:
+                    candidate = json.loads(agent_row[0])
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                if event and candidate.get("event_id") == event["id"] and not candidate.get("parent_id"):
+                    match = candidate
+                    break
+            run_id = "legacy:" + str(row["id"])
+            message_id = "legacy-user:" + str(row["id"])
+            created = row["created"] or utcnow().isoformat()
+            db.execute("INSERT OR IGNORE INTO assistant_messages(id,thread_id,role,content,created) VALUES (?,?,?,?,?)", (message_id, "home", "user", text.strip(), created))
+            event_pending = bool(event and event["status"] in {"pending", "running"})
+            status = "running" if event and event["status"] == "running" else "pending" if row["status"] == "pending" or event_pending else (match or {}).get("status", "failed")
+            db.execute("INSERT OR IGNORE INTO assistant_runs(id,thread_id,message_id,root_id,status,response,created,updated) VALUES (?,?,?,?,?,?,?,?)",
+                       (run_id, "home", message_id, root_id, status, (match or {}).get("message"), created, created))
+            if match and isinstance(match.get("message"), str) and match["message"]:
+                db.execute("INSERT OR IGNORE INTO assistant_messages(id,thread_id,role,content,created) VALUES (?,?,?,?,?)",
+                           ("legacy-assistant:" + str(row["id"]), "home", "assistant", match["message"], (datetime.fromisoformat(created) + timedelta(microseconds=1)).isoformat()))
+            if event and row["kind"] == "details" and event_pending:
+                try:
+                    event_payload = json.loads(event["payload"] or "{}")
+                    event_payload.setdefault("root_id", root_id)
+                    db.execute("UPDATE events SET payload=? WHERE id=?", (json.dumps(event_payload), event["id"]))
+                except (TypeError, json.JSONDecodeError):
+                    pass
 
     @contextmanager
     def transaction(self):
@@ -318,6 +375,52 @@ class Repository:
     def finish_request(self, request_id: str, status: str, result: str) -> None:
         with self.transaction() as db:
             db.execute("UPDATE requests SET status=?,result=? WHERE id=?", (status, result, request_id))
+
+    def assistant_messages(self, thread_id: str = "home") -> list[dict]:
+        with self.transaction() as db:
+            rows = db.execute("SELECT id,role,content,created FROM assistant_messages WHERE thread_id=? ORDER BY created,rowid", (thread_id,)).fetchall()
+            return [dict(row) for row in rows]
+
+    def assistant_run(self, run_id: str) -> dict | None:
+        with self.transaction() as db:
+            row = db.execute("SELECT * FROM assistant_runs WHERE id=?", (run_id,)).fetchone()
+            return dict(row) if row else None
+
+    def assistant_run_for_message(self, thread_id: str, message_id: str) -> dict | None:
+        with self.transaction() as db:
+            row = db.execute("SELECT * FROM assistant_runs WHERE thread_id=? AND message_id=?", (thread_id, message_id)).fetchone()
+            return dict(row) if row else None
+
+    def create_assistant_run(self, run_id: str, thread_id: str, message_id: str, root_id: str, text: str) -> None:
+        now = utcnow().isoformat()
+        with self.transaction() as db:
+            db.execute("INSERT INTO assistant_messages(id,thread_id,role,content,created) VALUES (?,?,?,?,?)", (message_id, thread_id, "user", text, now))
+            db.execute("INSERT INTO assistant_runs(id,thread_id,message_id,root_id,status,created,updated) VALUES (?,?,?,?,?,?,?)", (run_id, thread_id, message_id, root_id, "pending", now, now))
+
+    def append_assistant_event(self, run_id: str, payload: dict) -> int:
+        with self.transaction() as db:
+            cur = db.execute("INSERT INTO assistant_events(run_id,payload,created) VALUES (?,?,?)", (run_id, json.dumps(encode(payload), ensure_ascii=False, allow_nan=False), utcnow().isoformat()))
+            return int(cur.lastrowid)
+
+    def assistant_events(self, run_id: str, after: int = 0) -> list[dict]:
+        with self.transaction() as db:
+            return [{"sequence": row[0], "payload": json.loads(row[1]), "created": row[2]} for row in db.execute("SELECT sequence,payload,created FROM assistant_events WHERE run_id=? AND sequence>? ORDER BY sequence", (run_id, after))]
+
+    def update_assistant_run(self, run_id: str, status: str, response: str | None = None) -> None:
+        with self.transaction() as db:
+            db.execute("UPDATE assistant_runs SET status=?,response=COALESCE(?,response),updated=? WHERE id=?", (status, response, utcnow().isoformat(), run_id))
+
+    def add_assistant_reply(self, run_id: str, response: str) -> None:
+        with self.transaction() as db:
+            row = db.execute("SELECT thread_id FROM assistant_runs WHERE id=?", (run_id,)).fetchone()
+            if not row:
+                return
+            db.execute("INSERT OR IGNORE INTO assistant_messages(id,thread_id,role,content,created) VALUES (?,?,?,?,?)", (f"assistant:{run_id}", row[0], "assistant", response, utcnow().isoformat()))
+
+    def assistant_run_by_root(self, root_id: str) -> dict | None:
+        with self.transaction() as db:
+            row = db.execute("SELECT * FROM assistant_runs WHERE root_id=?", (root_id,)).fetchone()
+            return dict(row) if row else None
 
     def bulb_action(self, request_id: str) -> dict | None:
         with self.transaction() as db:

@@ -39,7 +39,8 @@ def main():
     env = {**os.environ, 'MQTT_HOST': '127.0.0.1', 'MQTT_PORT': str(args.port),
            'MQTT_TOPIC': 'test/energy/' + directory.name, 'HEMS_MQTT_ROOT': 'test/hems/' + directory.name,
            'HEMS_DB': repo.path, 'HEMS_DEVICE_DB': str(directory / 'washer.db'),
-           'HEMS_AC_DB': str(directory / 'ac.db'), 'HEMS_TRANSPORT': 'mqtt',
+           'HEMS_AC_DB': str(directory / 'ac.db'), 'HEMS_BULB_DB': str(directory / 'bulb.db'),
+           'HEMS_TRANSPORT': 'mqtt',
            'WASH_MINUTES': '3', 'RINSE_MINUTES': '3', 'SPIN_MINUTES': '3', 'PYTHONIOENCODING': 'utf-8'}
     processes, logs, checks = [], [], {}
     client = httpx.Client(base_url=f'http://127.0.0.1:{api_port}', timeout=4)
@@ -107,7 +108,7 @@ def main():
         assert client.post('/api/requests', json=body).status_code == 202
 
     try:
-        for name in ('washer', 'ac', 'control'):
+        for name in ('washer', 'ac', 'bulb', 'control'):
             spawn(name)
         spawn('api', '--port', str(api_port))
         wait(lambda: all(d['fresh'] for d in home()['devices'].values()), 'live_http_device_feedback')
@@ -117,13 +118,18 @@ def main():
         checks['unapproved_never_started'] = True
         for task in tasks:
             approve(task)
-        wait(lambda: all(d['active_task'] and d['active_task']['status'] == 'running' for d in home()['devices'].values()), 'both_devices_running')
-        run_ids = {identifier: device['state']['run_id'] for identifier, device in home()['devices'].items()}
+        controlled_devices = ('washer-1', 'ac-1')
+        wait(lambda: all(home()['devices'][identifier]['active_task']
+                         and home()['devices'][identifier]['active_task']['status'] == 'running'
+                         for identifier in controlled_devices), 'both_devices_running')
+        run_ids = {identifier: home()['devices'][identifier]['state']['run_id'] for identifier in controlled_devices}
         if args.recovery:
             subprocess.run(['docker', 'stop', args.broker_container], check=True, capture_output=True)
             wait(lambda: all(not d['fresh'] for d in home()['devices'].values()), 'stale_feedback_during_disconnect', 18)
             subprocess.run(['docker', 'start', args.broker_container], check=True, capture_output=True)
-            wait(lambda: all(d['fresh'] and d['state']['run_id'] == run_ids[identifier] for identifier, d in home()['devices'].items()), 'broker_recovery_same_runs', 20)
+            wait(lambda: all(d['fresh'] for d in home()['devices'].values())
+                 and all(home()['devices'][identifier]['state']['run_id'] == run_ids[identifier]
+                         for identifier in controlled_devices), 'broker_recovery_same_runs', 20)
         wait(lambda: all(home()['devices'][task['device_id']]['latest_task']['status'] == 'completed' for task in tasks), 'both_completed_via_http', 55)
         for identifier in run_ids:
             starts = [row for row in repo.records('commands', 100) if json.loads(row['data'])['action'] == 'start' and json.loads(row['data'])['device_id'] == identifier]

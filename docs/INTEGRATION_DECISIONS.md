@@ -21,7 +21,7 @@
 | 項目 | 決策 |
 | --- | --- |
 | 主要目標 | 實際應用：需求變更或設備異常時，調整排程並確認執行結果；不以策略比較為主要交付 |
-| 專案主體 | 保留目前 Python package、MQTT 與 Streamlit，選擇性參考上游 Agent 與排程設計 |
+| 專案主體 | 保留 Python package、MQTT 與 Agent／排程；原 Streamlit 決策已由 React／CopilotKit 遷移取代 |
 | 功能順序 | 先完成洗衣機閉環排程，再加入冷氣管理 |
 | 通訊順序 | 先完成 MQTT 控制與回饋，再接真正的 Matter 控制 |
 | 核准方式 | 使用者核准計畫後才自動執行 |

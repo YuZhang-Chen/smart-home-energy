@@ -190,11 +190,14 @@ async def device_session(repo, event, task, budget, parent_id):
     return encode(run)
 
 
-async def run_household(repo, event, hems, providers=None, monotonic=time.monotonic):
+async def run_household(repo, event, hems, providers=None, monotonic=time.monotonic, progress=None):
     run_id, started = uuid4().hex, monotonic()
     results, status, message = [], "failed", "家庭工作未完成，請使用各設備表單"
     budget = SharedBudget(hems, [], monotonic)
     root_id = event.payload.get("root_id", event.event_id)
+    def report(text):
+        if progress:
+            progress(text)
     try:
         budget.providers = configured_providers() if providers is None else providers
         if event.task_id:
@@ -213,6 +216,7 @@ task_id 只能取自 get_home_state.tasks 的未完成任務；設備回報可�
 僅查詢可 {"finish":"結果"}；資訊不足可 {"ask":"問題"}。"""
             messages = [{"role": "system", "content": system}, {"role": "user", "content": event.payload["text"]}]
             while True:
+                report("Main Agent 正在理解需求與檢查設備狀態")
                 reply = await budget.complete(messages, repo, run_id)
                 reply_provider = budget.providers[budget.index].name
                 try:
@@ -229,6 +233,7 @@ task_id 只能取自 get_home_state.tasks 的未完成任務；設備回報可�
                         break
                     if set(action) != {"tool", "arguments", "summary"} or not isinstance(action["arguments"], dict):
                         raise ValueError("工具動作格式不符")
+                    report("Agent 正在執行「" + action["tool"] + "」")
                     if action["tool"] == "get_home_state" and action["arguments"] == {}:
                         active = repo.active_tasks()
                         devices = {device: repo.device(device) for device in ("washer-1", "ac-1", "bulb-1")}
@@ -304,6 +309,7 @@ task_id 只能取自 get_home_state.tasks 的未完成任務；設備回報可�
                                 child_event = replace(event, task_id=task.task_id, payload={"text": request["text"], "root_id": root_id})
                                 result = await device_session(repo, child_event, task, budget, run_id)
                                 results.append(result)
+                                report(("冷氣" if device == "ac-1" else "洗衣機") + "：" + result.get("message", "設備計畫已更新"))
                                 with repo.transaction() as db:
                                     db.execute("UPDATE delegations SET data=? WHERE id=?", (json.dumps({"task_id": task.task_id, "version": repo.task(task.task_id).version, "result": result}), identifier))
                             except (ValueError, ProviderUnavailable) as error:

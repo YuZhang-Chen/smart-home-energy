@@ -119,6 +119,10 @@ class Controller:
             self.repo.switch_clock(p["speed"])
             self.recovered = False
             return "時間模式已切換"
+        if kind == "refresh_tariff_source":
+            from smart_home_energy.tariffs import refresh_source
+            refresh_source(self.repo)
+            return "台電費率來源已更新；既有有效來源會在更新失敗時保留"
         if kind in {"create_form", "create_text"}:
             c = decode(TaskConstraints, p["constraints"]) if kind == "create_form" else None
             from smart_home_energy.tariffs import selected_tariff

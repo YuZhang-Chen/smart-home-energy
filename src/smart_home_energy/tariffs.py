@@ -208,13 +208,18 @@ def household_estimate(repo, fallback=None):
 
 def refresh_source(repo):
     """Explicit user operation; retain last good source on any download error."""
-    with urlopen(SOURCE, timeout=20) as response:
-        raw = response.read(2_000_001)
-    if len(raw) > 2_000_000:
-        raise ValueError("官方資料超過上限")
-    payload = json.loads(raw.decode("utf-8-sig"))
-    if payload["metadata"]["schema_version"] != "1.0" or not all(k in payload["data"] for k in PLANS.values()):
-        raise ValueError("官方資料格式已改變，保留既有版本")
+    try:
+        with urlopen(SOURCE, timeout=20) as response:
+            raw = response.read(2_000_001)
+        if len(raw) > 2_000_000:
+            raise ValueError("官方資料超過上限")
+        payload = json.loads(raw.decode("utf-8-sig"))
+        if payload["metadata"]["schema_version"] != "1.0" or not all(k in payload["data"] for k in PLANS.values()):
+            raise ValueError("官方資料格式已改變")
+    except ValueError:
+        raise
+    except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError):
+        raise ValueError("台電來源無法連線或格式無效；已保留目前資料") from None
     snapshot = {"raw": payload, "sha256": sha256(raw).hexdigest(), "source_url": SOURCE,
                 "retrieved_at": utcnow().isoformat(), "effective_from": payload["metadata"]["實施日期"]}
     repo.set_meta("tariff_source", snapshot)

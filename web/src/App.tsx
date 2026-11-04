@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
   ArrowUpRight,
   Armchair,
@@ -14,6 +14,8 @@ import {
   Wind,
   Blinds,
 } from "lucide-react";
+import { CopilotSidebar, useConfigureSuggestions, useRenderTool } from "@copilotkit/react-core/v2";
+import { z } from "zod";
 import { useCommands, useHome } from "./api";
 import DayNightControls from "./DayNightControls";
 import {
@@ -28,13 +30,16 @@ import {
   type DayNightState,
   type TimeMode,
 } from "./dayNight";
-import DevicePanel from "./DevicePanel";
+import DevicePanel, { PlanForm } from "./DevicePanel";
+import { DiagnosticsView, EnergyView, SettingsView } from "./SystemViews";
 import {
   devices,
   isFresh,
   labels,
   type DeviceId,
   type SceneDevice,
+  type Task,
+  type Home,
 } from "./types";
 
 const Scene = lazy(() => import("./Scene"));
@@ -48,7 +53,21 @@ const icons = {
 };
 
 export default function App() {
+  useConfigureSuggestions({
+    consumerAgentId: "home",
+    available: "before-first-message",
+    suggestions: [
+      { title: "開冷氣", message: "幫我開冷氣一小時" },
+      { title: "安排洗衣", message: "幫我安排洗衣" },
+      { title: "調整燈光", message: "把客廳燈調到 40% 暖光" },
+    ],
+  });
   const [selected, setSelected] = useState<DeviceId>("ac-1");
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [assistantOpen, setAssistantOpen] = useState(true);
+  const [page, setPage] = useState<"room" | "energy" | "settings" | "diagnostics">("room");
+  const opener = useRef<HTMLElement | null>(null);
+  const drawer = useRef<HTMLDivElement>(null);
   const [reset, setReset] = useState(0);
   const [showHelp, setShowHelp] = useState(false);
   const [dayNight, setDayNight] = useState<DayNightState>(() => ({
@@ -72,6 +91,27 @@ export default function App() {
   const lighting = calculateDayNight(minute);
   const { home, error, refresh, realNow } = useHome();
   const { submit, pending, notice } = useCommands(refresh);
+  useRenderTool({
+    name: "render_task_card",
+    parameters: z.object({ task_id: z.string(), version: z.number(), device_id: z.string() }),
+    render: ({ parameters }) => <ProposalCard taskId={parameters.task_id} version={parameters.version} home={home} submit={submit} busy={!!pending} />,
+  }, [submit, pending, home]);
+  useEffect(() => {
+    if (!drawerOpen) return;
+    const previous = opener.current ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { setDrawerOpen(false); return; }
+      if (event.key !== "Tab" || !drawer.current) return;
+      const focusable = [...drawer.current.querySelectorAll<HTMLElement>('button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])')].filter(item => item.offsetParent !== null);
+      if (!focusable.length) { event.preventDefault(); drawer.current.focus(); return; }
+      const first = focusable[0], last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener("keydown", onKey);
+    drawer.current?.querySelector<HTMLElement>("button, input, select, textarea")?.focus();
+    return () => { document.removeEventListener("keydown", onKey); previous?.focus(); };
+  }, [drawerOpen]);
   const bulb = home?.devices["bulb-1"];
   const lightOn = bulb?.state?.power ?? false;
   const lightLevel = lightOn ? (bulb?.state?.level ?? 254) / 254 : 0;
@@ -107,18 +147,7 @@ export default function App() {
           </span>
         </a>
         <nav aria-label="主要導覽">
-          <span className="nav-current">
-            我的客廳
-            <span />
-          </span>
-          <a
-            href={home?.assistant_url ?? "http://127.0.0.1:8501"}
-            target="_blank"
-            rel="noreferrer"
-          >
-            家庭助理
-            <ArrowUpRight size={13} />
-          </a>
+          {([ ["room", "我的客廳"], ["energy", "用電紀錄"], ["settings", "偏好設定"], ["diagnostics", "系統診斷"] ] as const).map(([key, label]) => <button key={key} className={page === key ? "nav-current" : "nav-button"} aria-current={page === key ? "page" : undefined} onClick={() => setPage(key)}>{label}{page === key && <span />}</button>)}
         </nav>
         <div className="local-status">
           <span
@@ -128,6 +157,8 @@ export default function App() {
         </div>
       </header>
       <main>
+        {notice && <div className={`request-notice ${notice.error ? "error" : ""}`} role={notice.error ? "alert" : "status"}>{notice.text}</div>}
+        {page === "energy" ? <EnergyView /> : page === "settings" ? <SettingsView submit={submit} busy={!!pending} /> : page === "diagnostics" ? <DiagnosticsView /> : <>
         <section className="page-heading">
           <div>
             <div className="breadcrumb">
@@ -177,7 +208,7 @@ export default function App() {
                 >
                   <Scene
                     selected={selected}
-                    onSelect={setSelected}
+                    onSelect={(id) => { setSelected(id); setAssistantOpen(false); setDrawerOpen(true); }}
                     lightOn={lightOn}
                     lightLevel={lightLevel}
                     lightMired={lightMired}
@@ -272,7 +303,7 @@ export default function App() {
                       key={item.id}
                       className={`device-chip ${selected === item.id ? "selected" : ""}`}
                       aria-pressed={selected === item.id}
-                      onClick={() => setSelected(item.id)}
+                      onClick={(event) => { opener.current = event.currentTarget; setSelected(item.id); setAssistantOpen(false); setDrawerOpen(true); }}
                     >
                       <Icon size={21} strokeWidth={1.6} />
                       <span>
@@ -288,34 +319,15 @@ export default function App() {
             <div className="room-tip">
               <Lightbulb size={17} />
               <p>試著開關智慧燈泡，為客廳換一種氛圍。</p>
-              <button onClick={() => setSelected("bulb-1")}>
+              <button onClick={(event) => { opener.current = event.currentTarget; setSelected("bulb-1"); setAssistantOpen(false); setDrawerOpen(true); }}>
                 試試看
                 <ArrowUpRight size={13} />
               </button>
             </div>
           </div>
-          <div className="panel-column">
-            {notice && (
-              <div
-                className={`request-notice ${notice.error ? "error" : ""}`}
-                role={notice.error ? "alert" : "status"}
-              >
-                {notice.text}
-              </div>
-            )}
-            <DevicePanel
-              key={selected}
-              device={device}
-              home={home}
-              realNow={realNow}
-              lightOn={lightOn}
-              setLightOn={(on) => submit("set_bulb", { device_id: "bulb-1", power: on })}
-              submit={submit}
-              busy={!!pending}
-              connected={!!home && !error}
-            />
-          </div>
         </div>
+        {drawerOpen && <div className="drawer-scrim" onMouseDown={(event) => { if (event.target === event.currentTarget) setDrawerOpen(false); }}><div ref={drawer} className="device-drawer" role="dialog" aria-modal="true" aria-label={`${device.name}設備控制`}><div className="drawer-heading"><b>{device.name}設備控制</b><button onClick={() => setDrawerOpen(false)} aria-label="關閉設備控制">×</button></div><DevicePanel key={selected} device={device} home={home} realNow={realNow} lightOn={lightOn} setLightOn={(on) => submit("set_bulb", { device_id: "bulb-1", power: on })} submit={submit} busy={!!pending} connected={!!home && !error} /></div></div>}
+        </>}
       </main>
       <footer>
         <span>
@@ -323,6 +335,40 @@ export default function App() {
         </span>
         <span>設備排程：Asia/Taipei <i /> 晝夜：本機／展示時間</span>
       </footer>
+      <CopilotSidebar agentId="home" threadId="home" open={assistantOpen} onOpenChange={(open) => { setAssistantOpen(open); if (open) setDrawerOpen(false); }} width={420} labels={{ modalHeaderTitle: "家庭助理", chatInputPlaceholder: "描述你想安排的設備需求…" }} />
     </div>
   );
+}
+
+export function ProposalCard({ taskId, version, home, submit, busy }: { taskId?: string; version?: number; home: Home | null; submit: (kind: string, payload: Record<string, unknown>) => void; busy: boolean }) {
+  const [task, setTask] = useState<Task | null>(null);
+  const [reviewedVersion, setReviewedVersion] = useState(version);
+  const [editing, setEditing] = useState(false);
+  const [details, setDetails] = useState("");
+  const [maxCost, setMaxCost] = useState<number | null>(null);
+  useEffect(() => { if (!taskId) return; let live = true; const read = () => fetch(`/api/tasks/${encodeURIComponent(taskId)}`).then(r => r.ok ? r.json() : null).then(v => { if (live) setTask(v); }).catch(() => {}); void read(); const timer = window.setInterval(read, 2500); return () => { live = false; clearInterval(timer); }; }, [taskId]);
+  if (!taskId || !task) return <div className="proposal-card">正在讀取已保存的設備計畫…</div>;
+  const current = task.version === reviewedVersion, plan = task.ac_plan ?? task.plan, approvable = current && task.status === "pending" && plan;
+  const payload = { task_id: task.task_id, expected_version: task.version };
+  const editable = current && ["needs_details", "pending", "scheduled"].includes(task.status);
+  const abortable = current && ["starting", "running", "stopping", "unknown"].includes(task.status);
+  const resolvable = current && ["failed", "unknown"].includes(task.status);
+  const formatDate = (value: string) => new Intl.DateTimeFormat("zh-TW", { timeZone: "Asia/Taipei", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(value));
+  const time = (value: number | null) => value === null ? "無" : `${String(Math.floor(value / 60)).padStart(2, "0")}:${String(value % 60).padStart(2, "0")}`;
+  const device = devices.find(item => item.id === task.device_id);
+  return <article className="proposal-card">
+    <b>{task.device_id === "ac-1" ? "冷氣計畫" : "洗衣計畫"}</b>
+    <span>{labels[task.status] ?? task.status} · 版本 {task.version}</span>
+    {!current && <><span>計畫已更新，請檢視最新版本。</span><button onClick={() => { setReviewedVersion(task.version); setEditing(false); setMaxCost(null); }}>載入最新版本</button></>}
+    {plan && <><small>{formatDate(task.ac_plan?.constraints.start ?? task.plan!.start)} – {formatDate(task.ac_plan?.constraints.end ?? task.plan!.end)}（台北）</small>
+      {task.ac_plan && <small>目標 {task.ac_plan.constraints.target_c}°C，舒適範圍 {task.ac_plan.constraints.minimum_c}–{task.ac_plan.constraints.maximum_c}°C</small>}
+      {task.constraints && <small>最早 {formatDate(task.constraints.earliest)}；期限 {formatDate(task.constraints.deadline)}；安靜時段 {time(task.constraints.quiet_start)}–{time(task.constraints.quiet_end)}；行程 {task.plan?.program.name}</small>}
+      <small>{plan.tariff.official ? "台電費率增量估算" : "模擬費率估算"} · {plan.energy_kwh.toFixed(3)} kWh · NT$ {plan.cost.toFixed(2)}</small></>}
+    {approvable && <>{task.device_id === "washer-1" && <label>核准費用上限（NT$）<input type="number" min={plan.cost} step="any" value={maxCost ?? plan.cost} onChange={event => setMaxCost(event.target.valueAsNumber)} /></label>}
+      <button disabled={busy || (task.device_id === "washer-1" && maxCost !== null && (!Number.isFinite(maxCost) || maxCost < plan.cost))} onClick={() => submit("approve", { ...payload, ...(task.device_id === "washer-1" ? { max_cost: maxCost ?? plan.cost } : {}) })}>確認計畫</button></>}
+    {editable && <div className="proposal-actions"><button disabled={busy} onClick={() => setEditing(!editing)}>修改計畫</button><button className="secondary-action" disabled={busy} onClick={() => submit("cancel", payload)}>取消計畫</button></div>}
+    {editing && editable && home && device && <><PlanForm key={`${task.task_id}:${task.version}`} device={device} home={home} task={task} submit={submit} busy={busy} /><label>自然語言補充<textarea value={details} onChange={event => setDetails(event.target.value)} /></label><button disabled={busy || !details.trim()} onClick={() => { submit("details", { ...payload, text: details.trim() }); setDetails(""); }}>送出補充需求</button></>}
+    {abortable && <button className="secondary-action" disabled={busy} onClick={() => { if (window.confirm("送出中止請求？設備回報確認前，任務仍會顯示處理中。")) submit("abort", { ...payload, confirmed: true }); }}>中止設備任務</button>}
+    {resolvable && <button className="secondary-action" disabled={busy} onClick={() => { if (window.confirm("已確認設備安全並要解除異常？")) submit("reset", { ...payload, confirmed: true }); }}>確認狀態並解除異常</button>}
+  </article>;
 }

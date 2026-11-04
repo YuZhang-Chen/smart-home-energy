@@ -164,7 +164,6 @@ export interface BulbSnapshot {
 }
 export interface Home {
   server_time: string;
-  assistant_url: string;
   clock: { now: string; speed: number; clock_id: string };
   devices: Record<LiveId, DeviceSnapshot> & { "bulb-1": BulbSnapshot };
   preferences: {

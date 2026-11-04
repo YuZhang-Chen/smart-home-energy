@@ -5,16 +5,23 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "build": "tsc -b && vite build",
-    "test": "vitest run"
+    "build": "npm run check:runtime && tsc -b && vite build",
+    "test": "vitest run",
+    "check:runtime": "tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --strict --skipLibCheck --esModuleInterop --types node runtime/server.ts",
+    "runtime": "tsx runtime/server.ts"
   },
   "dependencies": {
+    "@ag-ui/client": "1.0.2",
+    "@copilotkit/react-core": "1.79.1",
+    "@copilotkit/runtime": "1.79.1",
     "@react-three/drei": "10.7.9",
     "@react-three/fiber": "9.8.2",
     "lucide-react": "1.59.0",
     "react": "19.3.1",
     "react-dom": "19.3.1",
-    "three": "0.186.1"
+    "rxjs": "7.8.1",
+    "three": "0.186.1",
+    "zod": "3.25.76"
   },
   "devDependencies": {
     "@testing-library/dom": "10.4.2",
@@ -27,6 +34,7 @@
     "@types/three": "0.186.0",
     "@vitejs/plugin-react": "5.2.0",
     "jsdom": "26.1.0",
+    "tsx": "4.20.6",
     "typescript": "5.9.3",
     "vite": "7.3.7",
     "vitest": "4.1.12"
