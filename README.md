@@ -38,13 +38,13 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[web,test]"
 npm.cmd ci --prefix web
 npm.cmd run build --prefix web
-.\scripts\start.ps1
+.\scripts\start.cmd
 # 開啟 http://127.0.0.1:8502
 # 展示完成後：
 .\scripts\stop.ps1 -StopBroker
 ```
 
-啟動腳本預設啟動 Broker、虛擬冷氣／洗衣／燈泡、Controller、FastAPI／React 與 Copilot Runtime。已有 Broker 時加 `-NoBroker`；選用 Matter 時加 `-Transport matter` 並先執行 `npm.cmd ci --prefix matter`。入口連接埠可用 `-ApiPort` 與 `-RuntimePort` 設定；舊 `-With3D` 參數保留相容，但不再切換介面。
+啟動腳本預設啟動 Broker、虛擬冷氣／洗衣／燈泡、Controller、FastAPI／React 與 Copilot Runtime。`start.cmd` 會自動使用 PowerShell 7（若未安裝則使用 Windows PowerShell 5.1），並只對這次啟動程序套用 `ExecutionPolicy Bypass`，避免下載檔案的簽章政策阻擋啟動。已有 Broker 時加 `-NoBroker`；選用 Matter 時加 `-Transport matter` 並先執行 `npm.cmd ci --prefix matter`。入口連接埠可用 `-ApiPort` 與 `-RuntimePort` 設定；舊 `-With3D` 參數保留相容，但不再切換介面。
 
 日誌與服務程序紀錄位於 `artifacts/runtime/`。停止腳本會核對程序 ID、執行檔與啟動時間；SQLite 與 Matter 配對資料會保留。設備執行途中停止設備服務時，下次啟動會依原有規則回報需查核的狀態。
 

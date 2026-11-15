@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowUpRight,
   Armchair,
@@ -52,16 +52,27 @@ const icons = {
   "fan-1": Fan,
 };
 
+// Keep the chat shell isolated from the room's frequent device-state updates.
+const MemoizedCopilotSidebar = memo(CopilotSidebar);
+const COPILOT_LABELS = {
+  modalHeaderTitle: "家庭助理",
+  chatInputPlaceholder: "描述你想安排的設備需求…",
+};
+
 export default function App() {
-  useConfigureSuggestions({
-    consumerAgentId: "home",
-    available: "before-first-message",
-    suggestions: [
-      { title: "開冷氣", message: "幫我開冷氣一小時" },
-      { title: "安排洗衣", message: "幫我安排洗衣" },
-      { title: "調整燈光", message: "把客廳燈調到 40% 暖光" },
-    ],
-  });
+  const suggestionConfig = useMemo(
+    () => ({
+      consumerAgentId: "home",
+      available: "before-first-message" as const,
+      suggestions: [
+        { title: "開冷氣", message: "幫我開冷氣一小時" },
+        { title: "安排洗衣", message: "幫我安排洗衣" },
+        { title: "調整燈光", message: "把客廳燈調到 40% 暖光" },
+      ],
+    }),
+    [],
+  );
+  useConfigureSuggestions(suggestionConfig);
   const [selected, setSelected] = useState<DeviceId>("ac-1");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(true);
@@ -77,25 +88,39 @@ export default function App() {
     anchorTime: performance.now(),
     playing: false,
   }));
-  const [, setClockTick] = useState(0);
-  useEffect(() => {
-    const refreshClock = () => setClockTick((value) => value + 1);
-    const timer = window.setInterval(refreshClock, 1000);
-    document.addEventListener("visibilitychange", refreshClock);
-    return () => {
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", refreshClock);
-    };
-  }, []);
+  // useHome already advances the displayed clock when its polling cycle completes.
+  // A second root-level 1s timer forced the entire 3D room and page tree to render again.
   const minute = displayedMinute(dayNight);
   const lighting = calculateDayNight(minute);
   const { home, error, refresh, realNow } = useHome();
   const { submit, pending, notice } = useCommands(refresh);
+
+  // The home snapshot is polled periodically. Do not re-register Copilot render
+  // tools every time that snapshot changes: the chat UI can otherwise rebuild
+  // its message renderer while the conversation is open.
+  const renderContext = useRef<{
+    home: Home | null;
+    submit: (kind: string, payload: Record<string, unknown>) => void;
+    busy: boolean;
+  }>({ home, submit, busy: !!pending });
+  renderContext.current = { home, submit, busy: !!pending };
+
   useRenderTool({
     name: "render_task_card",
     parameters: z.object({ task_id: z.string(), version: z.number(), device_id: z.string() }),
-    render: ({ parameters }) => <ProposalCard taskId={parameters.task_id} version={parameters.version} home={home} submit={submit} busy={!!pending} />,
-  }, [submit, pending, home]);
+    render: ({ parameters }) => {
+      const current = renderContext.current;
+      return (
+        <ProposalCard
+          taskId={parameters.task_id}
+          version={parameters.version}
+          home={current.home}
+          submit={current.submit}
+          busy={current.busy}
+        />
+      );
+    },
+  }, []);
   useRenderTool({
     name: "render_light_card",
     parameters: z.object({ request_id: z.string() }),
@@ -140,6 +165,10 @@ export default function App() {
       "等待回報"
     );
   };
+  const handleAssistantOpenChange = useCallback((open: boolean) => {
+    setAssistantOpen(open);
+    if (open) setDrawerOpen(false);
+  }, []);
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -340,7 +369,14 @@ export default function App() {
         </span>
         <span>設備排程：Asia/Taipei <i /> 晝夜：本機／展示時間</span>
       </footer>
-      <CopilotSidebar agentId="home" threadId="home" open={assistantOpen} onOpenChange={(open) => { setAssistantOpen(open); if (open) setDrawerOpen(false); }} width={420} labels={{ modalHeaderTitle: "家庭助理", chatInputPlaceholder: "描述你想安排的設備需求…" }} />
+      <MemoizedCopilotSidebar
+        agentId="home"
+        threadId="home"
+        open={assistantOpen}
+        onOpenChange={handleAssistantOpenChange}
+        width={420}
+        labels={COPILOT_LABELS}
+      />
     </div>
   );
 }
