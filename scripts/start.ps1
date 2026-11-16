@@ -73,7 +73,7 @@ $pidFile = Join-Path $runtimePath 'processes.json'
 if (Test-Path -LiteralPath $pidFile) {
     $existingEntries = @()
     try {
-        $existingEntries = @(ConvertFrom-Json -InputObject (Get-Content -LiteralPath $pidFile -Raw))
+        $existingEntries = ConvertFrom-Json -InputObject (Get-Content -LiteralPath $pidFile -Raw)
     }
     catch {
         $existingEntries = @()
