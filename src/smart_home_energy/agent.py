@@ -134,7 +134,11 @@ class SDKProvider:
             raise ProviderConfigurationError("尚未安裝 OpenAI SDK，請執行 pip install -e .") from None
         try:
             async with AsyncOpenAI(base_url=self.base_url, api_key=self.api_key, max_retries=0, timeout=timeout) as client:
-                response = await client.chat.completions.create(model=self.model, messages=messages)
+                response = await client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    response_format={"type": "json_object"},
+                )
                 if not response.choices or not response.choices[0].message.content:
                     raise ProviderUnavailable(f"{self.name} 回傳空白內容")
                 return response.choices[0].message.content

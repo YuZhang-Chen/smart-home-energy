@@ -61,25 +61,26 @@ export function useHome() {
           };
           setHome(next);
           setError("");
-          setTick(Date.now());
         }
       } catch {
         if (!disposed) setError("本機服務暫時無法連線，正在重新連線。");
       } finally {
         busy = false;
-        if (!disposed) timer = setTimeout(poll, 2000);
+        if (!disposed) {
+          // Advance freshness / local-clock calculations once per poll, not once per second.
+          setTick(Date.now());
+          timer = setTimeout(poll, 4000);
+        }
       }
     };
     refreshRef.current = () => {
       void poll();
     };
     void poll();
-    const clockTimer = setInterval(() => setTick(Date.now()), 1000);
     return () => {
       disposed = true;
       controller.abort();
       clearTimeout(timer);
-      clearInterval(clockTimer);
     };
   }, []);
   return {

@@ -1,7 +1,8 @@
-"""Depth-one model delegation with a shared end-to-end budget and durable IDs."""
+﻿"""Depth-one model delegation with a shared end-to-end budget and durable IDs."""
 import asyncio
 import inspect
 import json
+import re
 import time
 from datetime import datetime, timedelta
 from dataclasses import replace
@@ -15,7 +16,7 @@ from smart_home_energy.assistant_defaults import preferences
 from smart_home_energy.repository import AgentRun
 from smart_home_energy.tariffs import selected_tariff
 from smart_home_energy.agent_roles import agent_roles
-from smart_home_energy.light_agent import light_session
+from smart_home_energy.light_agent import light_session, is_explicit_light_only_request
 
 
 class SharedBudget:
@@ -63,7 +64,7 @@ class DeviceTools:
         prefs = preferences(self.repo)
         duration = prefs["duration_minutes"] if duration_minutes is None else duration_minutes
         target = prefs["target_c"] if target_c is None else target_c
-        number(duration, "冷氣運轉分鐘", 15)
+        number(duration, "冷氣運轉分鐘", 1)
         if duration > 1440:
             raise ValueError("冷氣運轉時間不能超過一天")
         now = self.repo.clock().now()
@@ -190,6 +191,291 @@ async def device_session(repo, event, task, budget, parent_id):
     return encode(run)
 
 
+_AC_DEVICE_RE = re.compile(r"冷氣|空調|空调|air\s*conditioner|\bac\b", re.I)
+_AC_OTHER_DEVICE_RE = re.compile(r"洗衣機|洗衣|燈泡|照明|燈|washer|bulb|light", re.I)
+_AC_ACTION_RE = re.compile(r"開啟|打開|開冷氣|開機|開到|開成|啟動|設定|設為|設成|調整|調到|調為|調成|運轉|運行|(?<!關)開(?!始)|turn\s*on|set|adjust", re.I)
+_AC_OFF_RE = re.compile(r"關閉|關掉|關冷氣|冷氣關掉|冷氣關閉|停止|關機|turn\s*off", re.I)
+_AC_QUERY_RE = re.compile(r"查詢|查看|目前狀態|狀態如何|現在狀態|幾度|多少度|耗電|電費|是否|有沒有|是不是|嗎", re.I)
+_AC_FUTURE_RE = re.compile(r"明天|後天|下週|下周|星期[一二三四五六日天]|週[一二三四五六日天]|周[一二三四五六日天]|預約|排程|今晚|明晚|早上|上午|下午|晚上|\d{1,2}\s*點|\d{1,2}:\d{2}", re.I)
+
+
+def explicit_ac_stop_request(text):
+    """Recognize a clear conversational request to stop/cancel the AC only."""
+    if not isinstance(text, str) or not _AC_DEVICE_RE.search(text):
+        return False
+    if _AC_OTHER_DEVICE_RE.search(text) or _AC_QUERY_RE.search(text):
+        return False
+    return bool(_AC_OFF_RE.search(text))
+
+
+def _chinese_integer(value):
+    digits = {"零": 0, "〇": 0, "一": 1, "二": 2, "兩": 2, "三": 3, "四": 4,
+              "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+    if value == "半":
+        return 0.5
+    if value == "十":
+        return 10
+    if "十" in value:
+        tens, _, units = value.partition("十")
+        return (digits[tens] if tens else 1) * 10 + (digits[units] if units else 0)
+    if len(value) == 1 and value in digits:
+        return digits[value]
+    raise ValueError("無法解析冷氣運轉時間")
+
+
+def explicit_ac_request(text):
+    """Return explicit immediate AC targets; leave queries, schedules and mixed-device requests to Main Agent."""
+    if not isinstance(text, str) or not _AC_DEVICE_RE.search(text):
+        return None
+    if _AC_OTHER_DEVICE_RE.search(text) or _AC_OFF_RE.search(text) or _AC_QUERY_RE.search(text):
+        return None
+    if _AC_FUTURE_RE.search(text) or not _AC_ACTION_RE.search(text):
+        return None
+
+    target_values = [
+        float(value)
+        for value in re.findall(r"(?<!\d)(\d{1,2}(?:\.\d+)?)\s*(?:°\s*C|℃|度)(?!\w)", text, re.I)
+    ]
+    if len(target_values) > 1:
+        return None
+
+    duration_values = []
+    for match in re.finditer(
+        r"(?<!\d)(\d+(?:\.\d+)?)\s*(小時|小时|時|hr|hrs|hours?|分鐘|分钟|分|min|mins?|minutes?)",
+        text,
+        re.I,
+    ):
+        amount = float(match.group(1))
+        unit = match.group(2).lower()
+        duration_values.append(amount * (60 if unit in {"小時", "小时", "時", "hr", "hrs", "hour", "hours"} else 1))
+
+    if not duration_values:
+        half = re.search(r"一個半小時|一個半小时", text)
+        if half:
+            duration_values.append(90)
+        else:
+            chinese_matches = list(re.finditer(
+                r"(?<![0-9])([零〇一二兩三四五六七八九十半]{1,3})\s*(小時|小时|時|分鐘|分钟|分)",
+                text,
+            ))
+            for match in chinese_matches:
+                amount = _chinese_integer(match.group(1))
+                unit = match.group(2)
+                duration_values.append(amount * (60 if unit in {"小時", "小时", "時"} else 1))
+    if len(duration_values) > 1:
+        return None
+
+    return {
+        "target_c": target_values[0] if target_values else None,
+        "duration_minutes": duration_values[0] if duration_values else None,
+    }
+
+
+def run_explicit_ac_request(repo, event, hems, parent_id, root_id, target, monotonic=time.monotonic, progress=None):
+    """Create and validate an AC proposal without an LLM; approval and MQTT execution remain unchanged."""
+    started = monotonic()
+    run_id = uuid4().hex
+    provider = "deterministic-ac-planner"
+    status = "failed"
+    message = "冷氣計畫未完成"
+    original_text = event.payload.get("text", "")
+    identifier = sha256(f"{root_id}:ac-1".encode()).hexdigest()
+
+    def report(value):
+        if progress:
+            progress(value)
+
+    try:
+        report("已辨識明確冷氣需求，正在檢查設備狀態並建立計畫")
+        with repo.transaction() as db:
+            old = db.execute("SELECT data FROM delegations WHERE id=?", (identifier,)).fetchone()
+            previous = json.loads(old[0]) if old else None
+            if previous and previous.get("result"):
+                return previous["result"]
+
+            if previous and previous.get("task_id"):
+                task = repo.task(previous["task_id"])
+            else:
+                task = repo.active_task("ac-1")
+                if task is None:
+                    task = repo.create_ac_task(None, selected_tariff(repo, hems.tariff()), original_text)
+                elif task.status not in {"needs_details", "pending", "scheduled"}:
+                    raise ValueError(f"客廳冷氣目前任務狀態為 {task.status}，為避免覆蓋運轉或故障中的設備，請先處理現有任務。")
+                elif task.ac_approval is not None:
+                    raise ValueError("客廳冷氣已有核准排程；請先在網頁確認或取消原排程，再提出新需求。")
+
+            if task.kind != "ac" or task.device_id != "ac-1":
+                raise ValueError("目前任務不是客廳冷氣任務，已停止操作。")
+            if task.status not in {"needs_details", "pending", "scheduled"}:
+                raise ValueError(f"客廳冷氣目前任務狀態為 {task.status}，不能直接修改。")
+            if task.ac_approval is not None:
+                raise ValueError("客廳冷氣已有核准排程；請先在網頁確認或取消原排程，再提出新需求。")
+
+            db.execute(
+                "INSERT OR IGNORE INTO delegations VALUES (?,?,?,?,?)",
+                (identifier, root_id, "ac-1", task.task_id,
+                 json.dumps({"task_id": task.task_id, "version": task.version})),
+            )
+
+        tools = DeviceTools(repo, task.task_id)
+        context = tools.get_device_context()
+        repo.log_tool(run_id, {
+            "role": "AC Agent", "provider": provider, "device_id": "ac-1",
+            "action": {"tool": "get_device_context", "arguments": {}, "summary": "讀取客廳冷氣與最新室溫"},
+            "result": context,
+        })
+        if not context["fresh"]:
+            raise ValueError("目前沒有收到新鮮的冷氣室溫回報；請確認 AC 模擬器與 MQTT 連線。尚未提出或啟動冷氣。")
+
+        plan = tools.prepare_default_plan(
+            duration_minutes=target.get("duration_minutes"),
+            target_c=target.get("target_c"),
+        )
+        repo.log_tool(run_id, {
+            "role": "AC Agent", "provider": provider, "device_id": "ac-1",
+            "action": {
+                "tool": "prepare_default_plan",
+                "arguments": {
+                    "duration_minutes": target.get("duration_minutes"),
+                    "target_c": target.get("target_c"),
+                },
+                "summary": "依使用者指定及已同意偏好建立冷氣計畫",
+            },
+            "result": plan,
+        })
+
+        validation = tools.validate_plan(plan)
+        repo.log_tool(run_id, {
+            "role": "AC Agent", "provider": provider, "device_id": "ac-1",
+            "action": {"tool": "validate_plan", "arguments": {"plan": plan}, "summary": "驗證冷氣溫度、時段與費用計算"},
+            "result": validation,
+        })
+        proposed = tools.propose_plan(plan, expected_version=task.version)
+        repo.log_tool(run_id, {
+            "role": "AC Agent", "provider": provider, "device_id": "ac-1",
+            "action": {
+                "tool": "propose_plan",
+                "arguments": {"plan": plan, "expected_version": task.version},
+                "summary": "提出待使用者核准的冷氣計畫",
+            },
+            "result": encode(proposed),
+        })
+
+        actual_target = plan["constraints"]["target_c"]
+        duration = (datetime.fromisoformat(plan["constraints"]["end"]) - datetime.fromisoformat(plan["constraints"]["start"])).total_seconds() / 60
+        status = "completed"
+        comfort_note = (
+            "此測試時間較短，預估結束時可能尚未進入舒適溫度範圍。"
+            if plan.get("comfortable_after_seconds") is None else ""
+        )
+        message = (
+            f"已建立客廳冷氣計畫：目標 {actual_target:g}°C，運轉 {duration:g} 分鐘。"
+            + comfort_note
+            + "計畫已通過驗證，目前等待使用者核准；核准後才會由控制服務透過 MQTT 發送啟動命令，並等待設備回報確認。"
+        )
+    except (ValueError, TypeError, KeyError, OverflowError) as error:
+        message = str(error)
+        status = "needs_details" if any(word in message for word in ("新鮮", "請先", "已有核准", "目前任務狀態")) else "failed"
+        repo.log_tool(run_id, {"role": "AC Agent", "provider": provider, "device_id": "ac-1", "error": message})
+
+    run = AgentRun(run_id, event.event_id, status, provider, 0, monotonic() - started, message, parent_id, "ac-1", "AC Agent")
+    repo.record_run(run)
+    result = encode(run)
+    with repo.transaction() as db:
+        db.execute(
+            "UPDATE delegations SET data=? WHERE id=?",
+            (json.dumps({"task_id": task.task_id if "task" in locals() else None,
+                         "version": repo.task(task.task_id).version if "task" in locals() else None,
+                         "result": result}), identifier),
+        )
+    return result
+
+
+def run_explicit_ac_stop_request(repo, event, parent_id, root_id, monotonic=time.monotonic, progress=None):
+    """Queue a confirmed AC abort through the resident controller, never via an LLM tool call."""
+    started = monotonic()
+    run_id = uuid4().hex
+    provider = "deterministic-ac-stop"
+    status = "failed"
+    message = "冷氣停止請求未完成"
+
+    def report(value):
+        if progress:
+            progress(value)
+
+    try:
+        report("已辨識關閉冷氣需求，正在核對目前運轉任務與設備回報")
+        task = repo.active_task("ac-1")
+        state = repo.device("ac-1")
+
+        if task is None:
+            if state and state.get("status") in {"idle", "completed", "aborted"}:
+                status, message = "completed", "客廳冷氣目前已是停止狀態，沒有需要關閉的運轉任務。"
+            else:
+                raise ValueError("找不到可安全中止的客廳冷氣任務；請先刷新設備狀態。")
+        elif task.status in {"needs_details", "pending", "scheduled"}:
+            repo.update_task(task.task_id, task.version, status="cancelled", message="使用者要求關閉冷氣；未啟動計畫已取消")
+            status, message = "completed", "客廳冷氣尚未啟動，已取消原本的待核准／排程計畫。"
+        elif task.status == "stopping":
+            status, message = "completed", "客廳冷氣已收到停止請求，目前正在等待設備回報確認。"
+        elif task.status in {"starting", "running", "unknown"}:
+            if not state:
+                raise ValueError("尚未取得冷氣設備狀態，為避免誤送停止命令，請稍後再試。")
+            observed = datetime.fromisoformat(state["observed_at"])
+            age = (utcnow() - observed).total_seconds()
+            if not -2 <= age <= 10:
+                raise ValueError("冷氣設備回報已過期，尚未送出停止命令；請確認 MQTT 與 AC 模擬器連線。")
+            if state.get("status") != "running" or state.get("task_id") != task.task_id or not task.run_id or state.get("run_id") != task.run_id:
+                raise ValueError("冷氣目前沒有回報與此任務相符的運轉狀態；尚未送出停止命令，請先刷新設備狀態。")
+
+            request_id = f"assistant:{root_id}:abort:ac-1"
+            payload = {"task_id": task.task_id, "expected_version": task.version, "confirmed": True}
+            previous = repo.request(request_id)
+            if previous is None:
+                repo.submit(request_id, "abort", payload)
+            elif previous["kind"] != "abort" or json.loads(previous["payload"]) != payload:
+                raise ValueError("停止請求識別碼衝突；請重新送出關閉指令。")
+
+            report("停止命令已交給控制服務，正在等待冷氣設備回報")
+            deadline = time.monotonic() + 7.0
+            while time.monotonic() < deadline:
+                request = repo.request(request_id)
+                current = repo.task(task.task_id)
+                if request and request["status"] == "error":
+                    raise ValueError(request.get("result") or "控制服務拒絕停止命令")
+                if current.status == "aborted":
+                    status, message = "completed", "已收到設備回報確認，客廳冷氣已關閉。"
+                    break
+                if current.status in {"failed", "resolved"}:
+                    raise ValueError(current.message or "冷氣停止狀態需要人工查核。")
+                time.sleep(0.1)
+            else:
+                current = repo.task(task.task_id)
+                if current.status == "stopping":
+                    status, message = "completed", "已送出冷氣停止命令，控制服務已接收；目前仍等待設備回報確認，請以冷氣狀態卡為準。"
+                else:
+                    status, message = "needs_details", "已提出冷氣停止請求，但尚未取得設備確認；請檢查控制服務、MQTT 與冷氣狀態卡，不要重複送出命令。"
+        elif task.status in {"completed", "aborted", "cancelled", "resolved"}:
+            status, message = "completed", "客廳冷氣任務已結束，目前沒有需要中止的運轉計畫。"
+        else:
+            raise ValueError(f"客廳冷氣目前任務狀態為 {task.status}，無法安全送出停止命令。")
+
+        repo.log_tool(run_id, {
+            "role": "AC Agent", "provider": provider, "device_id": "ac-1",
+            "action": {"tool": "request_ac_stop", "arguments": {"task_id": task.task_id if task else None},
+                       "summary": "核對同一運轉任務後，透過控制服務送出停止請求"},
+            "result": {"status": status, "message": message},
+        })
+    except (ValueError, TypeError, KeyError, OverflowError) as error:
+        message = str(error)
+        status = "needs_details" if any(word in message for word in ("過期", "刷新", "回報", "連線", "尚未取得")) else "failed"
+        repo.log_tool(run_id, {"role": "AC Agent", "provider": provider, "device_id": "ac-1", "error": message})
+
+    run = AgentRun(run_id, event.event_id, status, provider, 0, monotonic() - started, message, parent_id, "ac-1", "AC Agent")
+    repo.record_run(run)
+    return encode(run)
+
+
 async def run_household(repo, event, hems, providers=None, monotonic=time.monotonic, progress=None):
     run_id, started = uuid4().hex, monotonic()
     results, status, message = [], "failed", "家庭工作未完成，請使用各設備表單"
@@ -199,11 +485,45 @@ async def run_household(repo, event, hems, providers=None, monotonic=time.monoto
         if progress:
             progress(text)
     try:
-        budget.providers = configured_providers() if providers is None else providers
         if event.task_id:
+            budget.providers = configured_providers() if providers is None else providers
             results.append(await device_session(repo, event, repo.task(event.task_id), budget, run_id))
             status, message = results[0]["status"], results[0]["message"]
+        elif is_explicit_light_only_request(event.payload.get("text", "")):
+            # Clear bulb-only brightness/Kelvin controls go straight to Light Agent.
+            # Relative Kelvin changes are resolved there using the latest device
+            # state, without spending the shared Main Agent model budget.
+            report("已辨識燈泡控制需求，正在讀取設備狀態並計算亮度／色溫目標")
+            identifier = sha256(f"{root_id}:bulb-1".encode()).hexdigest()
+            previous_result = None
+            with repo.transaction() as db:
+                old = db.execute("SELECT data FROM delegations WHERE id=?", (identifier,)).fetchone()
+                previous = json.loads(old[0]) if old else None
+                if previous and previous.get("result"):
+                    previous_result = previous["result"]
+                else:
+                    db.execute("INSERT OR IGNORE INTO delegations VALUES (?,?,?,?,?)",
+                               (identifier, root_id, "bulb-1", None,
+                                json.dumps({"request_id": identifier})))
+            if previous_result is not None:
+                result = previous_result
+            else:
+                result = await light_session(repo, event, budget, run_id, root_id)
+                with repo.transaction() as db:
+                    db.execute("UPDATE delegations SET data=? WHERE id=?",
+                               (json.dumps({"request_id": identifier, "result": result}), identifier))
+            results.append(result)
+            status, message = result["status"], result["message"]
+        elif explicit_ac_stop_request(event.payload.get("text", "")):
+            result = run_explicit_ac_stop_request(repo, event, run_id, root_id, monotonic, report)
+            results.append(result)
+            status, message = result["status"], result["message"]
+        elif (ac_target := explicit_ac_request(event.payload.get("text", ""))) is not None:
+            result = run_explicit_ac_request(repo, event, hems, run_id, root_id, ac_target, monotonic, report)
+            results.append(result)
+            status, message = result["status"], result["message"]
         else:
+            budget.providers = configured_providers() if providers is None else providers
             system = """你是智慧家庭 Main Agent，使用繁體中文，每次只回一個 JSON 物件。
 工具 {"tool":"get_home_state","arguments":{},"summary":"摘要"}。
 可用 get_agent_roles={} 查詢角色權責。

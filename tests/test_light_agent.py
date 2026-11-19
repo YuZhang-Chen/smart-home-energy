@@ -4,6 +4,7 @@ import asyncio
 import os
 import threading
 from dataclasses import replace
+from datetime import timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -99,11 +100,48 @@ class LightAgentTests(unittest.TestCase):
         now = utcnow()
         control.tick(now)
         command = transport.sent[0][1]
-        transport.inbox.extend([("result", self.bulb.handle(command, now)), ("state", self.bulb.tick(now))])
-        control.tick(now)
+        result = self.bulb.handle(command, now)
+        later = now + timedelta(seconds=1)
+        state = self.bulb.tick(later)
+        transport.inbox.extend([("result", result), ("state", state)])
+        control.tick(later)
         self.assertEqual(self.repo.bulb_action(request["id"])["status"], "confirmed")
         self.assertTrue(self.repo.device("bulb-1")["power"])
         self.assertEqual(self.repo.device("bulb-1")["level"], 102)
+
+    def test_explicit_30_percent_light_request_works_without_model_and_confirms_device_feedback(self):
+        text = "請將客廳智慧燈泡的亮度調整為 30%，完成後查詢設備狀態，確認是否真的調整成功。"
+        self.repo.event("household:light-30", None, {"root_id": "light-30", "text": text})
+        event = self.repo.claim_event()
+
+        # No configured model is supplied: an unambiguous absolute target must
+        # still use the authorised Light Agent path and avoid malformed LLM JSON.
+        run = asyncio.run(run_household(self.repo, event, self.hems, providers=[]))
+        self.assertEqual(run.status, "completed", run.message)
+        self.assertIn("等待燈泡設備回報確認", run.message)
+
+        request = next(item for item in self.repo.pending_requests() if item["kind"] == "set_bulb")
+        import json
+        payload = json.loads(request["payload"])
+        self.assertEqual(payload["brightness_percent"], 30)
+        self.assertIsNone(payload["power"])
+
+        transport = FakeTransport()
+        controller = BulbController(self.repo, transport)
+        now = utcnow()
+        controller.tick(now)
+        self.assertEqual(len(transport.sent), 1)
+        command = transport.sent[0][1]
+        result = self.bulb.handle(command, now)
+        later = now + timedelta(seconds=1)
+        state = self.bulb.tick(later)
+        transport.inbox.extend([("result", result), ("state", state)])
+        controller.tick(later)
+
+        action = self.repo.bulb_action(request["id"])
+        self.assertEqual(action["status"], "confirmed")
+        self.assertEqual(self.repo.device("bulb-1")["level"], 76)
+        self.assertEqual(self.repo.request(request["id"])["status"], "done")
 
     @unittest.skipUnless(os.getenv("RUN_LIGHT_LIVE_TEST") == "1", "Set RUN_LIGHT_LIVE_TEST=1 to use the configured model")
     def test_real_model_delegates_light_and_device_confirms(self):

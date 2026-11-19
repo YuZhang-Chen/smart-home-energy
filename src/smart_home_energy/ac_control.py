@@ -104,7 +104,7 @@ class ACController(Controller):
         drift_key = "ac_drift_since:" + task.task_id
         outside = not c.minimum_c - .2 <= state.temperature_c <= c.maximum_c + .2
         since = self.repo.meta(drift_key)
-        if elapsed > (warmup or 0) and outside:
+        if warmup is not None and elapsed > warmup and outside:
             if since is None:
                 self.repo.set_meta(drift_key, elapsed)
             elif elapsed - since >= 120:
