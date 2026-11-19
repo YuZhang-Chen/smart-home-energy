@@ -1,3 +1,4 @@
+import TVControl from "./TVControl";
 import { useEffect, useState, type FormEvent } from "react";
 import {
   ArrowRight,
@@ -507,6 +508,8 @@ export default function DevicePanel({
   realNow,
   lightOn,
   setLightOn,
+  tvPower,
+  onTVPowerChange,
   submit,
   busy,
   connected,
@@ -514,8 +517,12 @@ export default function DevicePanel({
   device: SceneDevice;
   home: Home | null;
   realNow: number;
-  lightOn: boolean;
+    lightOn: boolean;
   setLightOn: (on: boolean) => void;
+
+  tvPower: boolean;
+  onTVPowerChange: (power: boolean) => void;
+
   submit: Submit;
   busy: boolean;
   connected: boolean;
@@ -720,8 +727,13 @@ export default function DevicePanel({
             <p>照明效果依設備回報同步；關閉時保留上次亮度與色溫。</p>
           </div>
         </>
-      ) : (
-        <div className="display-info">
+     ) : device.id === "tv-1" ? (
+  <TVControl
+    power={tvPower}
+    onPowerChange={onTVPowerChange}
+  />
+) : (
+  <div className="display-info">
           <Radio size={30} strokeWidth={1.3} />
           <h3>留給未來的智慧日常</h3>
           <p>
