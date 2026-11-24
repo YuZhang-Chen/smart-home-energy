@@ -161,7 +161,7 @@ describe("telemetry and animation contract", () => {
         home={home}
         realNow={Date.parse(stamp) + 11000}
         lightOn
-        setLightOn={vi.fn()}
+        setLightOn={vi.fn()} tvPower={false} onTVPowerChange={vi.fn()}
         submit={vi.fn()}
         busy={false}
         connected
@@ -266,7 +266,7 @@ describe("planning and approval", () => {
         home={home}
         realNow={Date.parse(stamp)}
         lightOn
-        setLightOn={vi.fn()}
+        setLightOn={vi.fn()} tvPower={false} onTVPowerChange={vi.fn()}
         submit={submit}
         busy={false}
         connected
@@ -310,7 +310,7 @@ describe("planning and approval", () => {
         home={home}
         realNow={Date.parse(stamp)}
         lightOn
-        setLightOn={vi.fn()}
+        setLightOn={vi.fn()} tvPower={false} onTVPowerChange={vi.fn()}
         submit={submit}
         busy={false}
         connected
@@ -340,6 +340,8 @@ describe("accessible scene controls", () => {
       realNow: Date.parse(stamp),
       lightOn: false,
       setLightOn: vi.fn(),
+      tvPower: false,
+      onTVPowerChange: vi.fn(),
       submit,
       busy: false,
       connected: true,
@@ -373,7 +375,7 @@ describe("accessible scene controls", () => {
     const submit = vi.fn();
     render(<DevicePanel device={devices.find((device) => device.id === "bulb-1")!}
       home={fixture()} realNow={Date.parse(stamp) + 11_000} lightOn
-      setLightOn={vi.fn()} submit={submit} busy={false} connected />);
+      setLightOn={vi.fn()} tvPower={false} onTVPowerChange={vi.fn()} submit={submit} busy={false} connected />);
     expect(screen.getByText("設備回報已過期，保留最後數值")).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "客廳燈泡" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "套用照明設定" })).toBeDisabled();

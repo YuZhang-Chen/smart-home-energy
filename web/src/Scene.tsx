@@ -31,6 +31,7 @@ import {
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import { devices, isAnimating, type DeviceId, type Home } from "./types";
 import { calculateDayNight, displayedMinute, type DayNightState } from "./dayNight";
+import CurtainPanels from "./CurtainPanels";
 
 type Vec = [number, number, number];
 const wood = "#bb9065",
@@ -912,20 +913,7 @@ export default function Scene({
                   size={[0.04, 0.06, 3.65]}
                   color="#ddd5c2"
                 />
-                {[-1, 1].map((side) =>
-                  Array.from({ length: 6 }, (_, i) => (
-                    <Cylinder
-                      key={`${side}${i}`}
-                      at={[
-                        0.12 + (i % 2) * 0.04,
-                        1.5,
-                        side * (1.05 + i * 0.16),
-                      ]}
-                      args={[0.11, 0.11, 2.6, 6]}
-                      color={i % 2 ? "#ded6bf" : "#ece4d0"}
-                    />
-                  )),
-                )}
+                <CurtainPanels speed={7} />
                 <Block
                   at={[0.1, 2.87, 0]}
                   size={[0.08, 0.06, 4]}

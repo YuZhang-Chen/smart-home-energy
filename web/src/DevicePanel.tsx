@@ -1,4 +1,5 @@
 import TVControl from "./TVControl";
+import CurtainControl from "./CurtainControl";
 import { useEffect, useState, type FormEvent } from "react";
 import {
   ArrowRight,
@@ -732,6 +733,8 @@ export default function DevicePanel({
     power={tvPower}
     onPowerChange={onTVPowerChange}
   />
+) : device.id === "curtain-1" ? (
+  <CurtainControl />
 ) : (
   <div className="display-info">
           <Radio size={30} strokeWidth={1.3} />
