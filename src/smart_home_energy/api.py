@@ -191,6 +191,7 @@ def create_app(repo: Repository | None = None, hems: HemsSettings | None = None,
 
     @app.get("/api/home")
     def home():
+        from smart_home_energy import curtain, tv
         with repo.transaction():
             clock, real = repo.clock(), utcnow()
             devices = {}
@@ -202,6 +203,18 @@ def create_app(repo: Repository | None = None, hems: HemsSettings | None = None,
                     "active_task": encode(repo.active_task(identifier)) if identifier != "bulb-1" else None,
                     "latest_task": encode(repo.latest_task(identifier)) if identifier != "bulb-1" else None,
                 }
+            devices["curtain-1"] = {
+                "state": curtain.get_status(),
+                "fresh": True,
+                "active_task": None,
+                "latest_task": None,
+            }
+            devices["tv-1"] = {
+                "state": tv.get_status(),
+                "fresh": True,
+                "active_task": None,
+                "latest_task": None,
+            }
             return {"server_time": real.isoformat(), "clock": {"now": clock.now(real).isoformat(),
                     "speed": clock.speed, "clock_id": clock.clock_id}, "devices": devices,
                     "preferences": preferences(repo), "program": encode(hems.program())}
@@ -369,6 +382,12 @@ def create_app(repo: Repository | None = None, hems: HemsSettings | None = None,
             payload = json.loads(row["payload"])
             result["target"] = {key: payload[key] for key in ("power", "brightness_percent", "kelvin") if payload.get(key) is not None}
         return result
+
+    from smart_home_energy.curtain import ensure_scheduler_started, router as curtain_router
+    from smart_home_energy.tv import router as tv_router
+    ensure_scheduler_started()
+    app.include_router(curtain_router)
+    app.include_router(tv_router)
 
     @app.get("/api/{unknown:path}", include_in_schema=False)
     def unknown_api(unknown: str):

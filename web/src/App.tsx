@@ -68,6 +68,8 @@ export default function App() {
         { title: "開冷氣", message: "幫我開冷氣一小時" },
         { title: "安排洗衣", message: "幫我安排洗衣" },
         { title: "調整燈光", message: "把客廳燈調到 40% 暖光" },
+        { title: "打開電視", message: "幫我打開電視並切換到 HDMI 2" },
+        { title: "拉開窗簾", message: "把客廳窗簾打開一半" },
       ],
     }),
     [],
@@ -75,52 +77,6 @@ export default function App() {
   useConfigureSuggestions(suggestionConfig);
   const [selected, setSelected] = useState<DeviceId>("ac-1");
   const [tvPower, setTvPower] = useState(false);
-  const [curtainStatus, setCurtainStatus] = useState<{
-    position: number;
-    target: number;
-    status: string;
-  } | null>(null);
-
-  useEffect(() => {
-    let active = true;
-
-    const readCurtainStatus = async () => {
-      try {
-        const response = await fetch(
-          "http://127.0.0.1:8001/api/curtain/status",
-          { cache: "no-store" }
-        );
-
-        if (!response.ok) throw new Error("Curtain API unavailable");
-
-        const data = await response.json();
-
-        if (
-          active &&
-          typeof data.position === "number" &&
-          typeof data.target === "number" &&
-          typeof data.status === "string"
-        ) {
-          setCurtainStatus({
-            position: data.position,
-            target: data.target,
-            status: data.status,
-          });
-        }
-      } catch {
-        if (active) setCurtainStatus(null);
-      }
-    };
-
-    void readCurtainStatus();
-
-    const timer = window.setInterval(readCurtainStatus, 1000);
-
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-    };
-  }, []);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(true);
   const [page, setPage] = useState<"room" | "energy" | "settings" | "diagnostics">("room");
@@ -141,6 +97,14 @@ export default function App() {
   const lighting = calculateDayNight(minute);
   const { home, error, refresh, realNow } = useHome();
   const { submit, pending, notice } = useCommands(refresh);
+
+  const curtainStatus = home?.devices["curtain-1"]?.state ?? null;
+  useEffect(() => {
+    const remoteTvPower = home?.devices["tv-1"]?.state?.power;
+    if (typeof remoteTvPower === "boolean") {
+      setTvPower(remoteTvPower);
+    }
+  }, [home?.devices["tv-1"]?.state?.power]);
 
   // The home snapshot is polled periodically. Do not re-register Copilot render
   // tools every time that snapshot changes: the chat UI can otherwise rebuild

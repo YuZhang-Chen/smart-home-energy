@@ -788,6 +788,7 @@ export default function Scene({
 }) {
   const reduced = useReducedMotion();
   const sceneLighting = calculateDayNight(displayedMinute(dayNight));
+  const curtainTarget = home?.devices["curtain-1"]?.state?.target ?? home?.devices["curtain-1"]?.state?.position ?? 0;
   const [hovered, setHovered] = useState<DeviceId | null>(null);
   const label = useRef<HTMLDivElement>(null);
   const activeLabel = hovered ?? selected;
@@ -913,7 +914,7 @@ export default function Scene({
                   size={[0.04, 0.06, 3.65]}
                   color="#ddd5c2"
                 />
-                <CurtainPanels speed={7} />
+                <CurtainPanels position={curtainTarget} speed={7} />
                 <Block
                   at={[0.1, 2.87, 0]}
                   size={[0.08, 0.06, 4]}

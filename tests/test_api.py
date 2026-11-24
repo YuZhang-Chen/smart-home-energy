@@ -165,6 +165,88 @@ class ApiTests(unittest.TestCase):
             'device_id': 'bulb-1', 'power': True, 'brightness_percent': 0}}
         self.assertEqual(self.client.post('/api/requests', json=bad).status_code, 422)
 
+    def test_same_origin_curtain_and_tv_endpoints_and_household_agent_integration(self):
+        import asyncio
+        from smart_home_energy.multi_agent import run_household
+
+        # 1. Same-origin Curtain REST API on 8502 app
+        self.assertEqual(self.client.get('/api/curtain/health').status_code, 200)
+        curtain_res = self.client.post('/api/curtain/command', json={'command': '半開'})
+        self.assertEqual(curtain_res.status_code, 200)
+        self.assertEqual(curtain_res.json()['target'], 50.0)
+
+        # 2. Same-origin TV REST API on 8502 app
+        self.assertEqual(self.client.get('/api/tv/status').status_code, 200)
+        tv_res = self.client.post('/api/tv/command', json={'command': '打開電視並切換到 HDMI 2'})
+        self.assertEqual(tv_res.status_code, 200)
+        self.assertTrue(tv_res.json()['status']['power'])
+        self.assertEqual(tv_res.json()['status']['input'], 'HDMI2')
+
+        # 3. Unified household assistant conversation controlling TV and Curtain
+        self.repo.event('household:tv-chat', None, {'root_id': 'tv-chat', 'text': '幫我把電視音量調到 35'})
+        tv_run = asyncio.run(run_household(self.repo, self.repo.claim_event(), self.hems, providers=[]))
+        self.assertEqual(tv_run.status, 'completed')
+        self.assertEqual(self.client.get('/api/tv/status').json()['volume'], 35)
+
+        self.repo.event('household:curtain-chat', None, {'root_id': 'curtain-chat', 'text': '把客廳窗簾全開'})
+        curtain_run = asyncio.run(run_household(self.repo, self.repo.claim_event(), self.hems, providers=[]))
+        self.assertEqual(curtain_run.status, 'completed')
+        self.assertEqual(self.client.get('/api/curtain/status').json()['target'], 100.0)
+
+    def test_open_curtain_and_turn_off_light_multi_agent_and_scene_sync(self):
+        import asyncio
+        from smart_home_energy import curtain
+        from smart_home_energy.multi_agent import run_household
+        from test_agent import FakeModel, action
+
+        # Reset curtain to closed (0%) and bulb to ON (100%)
+        curtain.move_to(0, duration=0)
+        self.assertEqual(self.client.get('/api/curtain/status').json()['position'], 0.0)
+        bulb = VirtualBulb(Repository(self.directory / 'bulb_combo.db'), self.real)
+        bulb.state = replace(bulb.state, power=True, level=254)
+        self.repo.save_device(bulb.state)
+
+        # User says: "開窗簾 並且關燈"
+        self.repo.event(
+            'household:curtain-and-light',
+            None,
+            {'root_id': 'curtain-and-light', 'text': '開窗簾 並且關燈'},
+        )
+        replies = [
+            action('get_home_state'),
+            action(
+                'delegate_tasks',
+                requests=[
+                    {'device_id': 'curtain-1', 'text': '開窗簾'},
+                    {'device_id': 'bulb-1', 'text': '關燈'},
+                ],
+            ),
+            action('submit_light_action', device_id='bulb-1', power=False, duration_seconds=0),
+        ]
+        run = asyncio.run(run_household(self.repo, self.repo.claim_event(), self.hems, [FakeModel(replies)]))
+        self.assertEqual(run.status, 'completed')
+        self.assertEqual(
+            run.message,
+            'curtain-1：客廳窗簾已執行指令：移動至 全開 (100%)。；bulb-1：照明設定已排入控制佇列，等待設備回報確認',
+        )
+
+        # Simulate separate API process reading persisted curtain_state.json and advancing animation
+        curtain.state['position'] = 0.0
+        curtain.state['target'] = 0.0
+        curtain.state['updated_at'] = '1970-01-01T00:00:00+00:00'
+        status_after = self.client.get('/api/curtain/status').json()
+        self.assertEqual(status_after['target'], 100.0)
+        self.assertGreater(status_after['position'], 0.0)
+
+        # Verify bulb controller processes the queued turn-off command and confirms feedback
+        transport = FakeTransport()
+        control = BulbController(self.repo, transport)
+        control.tick(self.real)
+        command = transport.sent[0][1]
+        transport.inbox.extend([('result', bulb.handle(command, self.real)), ('state', bulb.tick(self.real))])
+        control.tick(self.real)
+        self.assertFalse(self.repo.device('bulb-1')['power'])
+
 
 if __name__ == '__main__':
     unittest.main()

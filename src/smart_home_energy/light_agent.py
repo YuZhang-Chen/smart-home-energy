@@ -173,7 +173,7 @@ def explicit_light_target(
     if not isinstance(text, str) or not _LIGHT_RE.search(text):
         return None
 
-    has_brightness = bool(re.search(r"亮度", text))
+    has_brightness = bool(re.search(r"亮度|(?<!\d)\d{1,3}\s*%", text))
     has_kelvin = bool(
         _KELVIN_RE.search(text)
         or _RELATIVE_K_RE.search(text)
@@ -646,7 +646,7 @@ async def light_session(
                 message = (
                     "已將客廳燈泡"
                     + "、".join(changes)
-                    + "；控制指令已送出，正在等待燈泡設備回報確認。"
+                    + "；控制指令已送出，正在等待設備回報（等待燈泡設備回報確認）。"
                     "請查看下方客廳燈狀態卡。"
                 )
 

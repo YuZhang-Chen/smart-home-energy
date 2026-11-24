@@ -1,5 +1,5 @@
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import {
   Tv,
   Power,
@@ -15,17 +15,21 @@ import {
 } from "lucide-react";
 
 
+import type { TVState } from "./types";
+
 type InputSource = "HDMI1" | "HDMI2" | "HDMI3" | "HDMI4";
 type Playback = "playing" | "paused" | "stopped";
 
 interface TVControlProps {
   power: boolean;
   onPowerChange: (power: boolean) => void;
+  tvState?: TVState | null;
 }
 
 export default function TVControl({
   power,
   onPowerChange,
+  tvState,
 }: TVControlProps) {
   const [volume, setVolume] = useState(25);
   const [muted, setMuted] = useState(false);
@@ -43,13 +47,32 @@ export default function TVControl({
     setHistory((old) => [text, ...old].slice(0, 4));
   };
 
+  const syncToBackend = (payload: Record<string, unknown>) => {
+    void fetch("/api/tv/control", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }).catch(() => {});
+  };
+
+  useEffect(() => {
+    if (!tvState) return;
+    if (typeof tvState.power === "boolean") onPowerChange(tvState.power);
+    if (typeof tvState.volume === "number") setVolume(tvState.volume);
+    if (typeof tvState.muted === "boolean") setMuted(tvState.muted);
+    if (typeof tvState.input === "string") setInput(tvState.input);
+    if (typeof tvState.playback === "string") setPlayback(tvState.playback);
+  }, [tvState, onPowerChange]);
+
 const togglePower = () => {
   if (power) {
     onPowerChange(false);
     setPlayback("stopped");
+    syncToBackend({ power: false, playback: "stopped" });
     notify("電視已關閉，進入待機狀態。");
   } else {
     onPowerChange(true);
+    syncToBackend({ power: true });
     notify("電視已開啟，歡迎回家！");
   }
 };
@@ -58,6 +81,7 @@ const togglePower = () => {
     const next = Math.max(0, Math.min(100, value));
     setVolume(next);
     setMuted(false);
+    syncToBackend({ volume: next, muted: false });
   };
 
   const changeInput = (source: InputSource) => {
@@ -67,6 +91,7 @@ const togglePower = () => {
     }
 
     setInput(source);
+    syncToBackend({ input: source });
     notify(`已切換至 ${source}。`);
   };
 
@@ -77,6 +102,7 @@ const togglePower = () => {
     }
 
     setPlayback(value);
+    syncToBackend({ playback: value });
 
     const names = {
       playing: "開始播放",
@@ -101,15 +127,19 @@ const togglePower = () => {
     if (/關閉電視|關掉電視|電視關機|關機/.test(normalized)) {
       onPowerChange(false);
       setPlayback("stopped");
+      syncToBackend({ power: false, playback: "stopped" });
       notify("AI 已執行：關閉電視。");
     } else if (/打開電視|開啟電視|電視開機|開機/.test(normalized)) {
       onPowerChange(true);
+      syncToBackend({ power: true });
       notify("AI 已執行：開啟電視。");
     } else if (/取消靜音|解除靜音/.test(normalized)) {
       setMuted(false);
+      syncToBackend({ muted: false });
       notify("AI 已執行：解除靜音。");
     } else if (/靜音/.test(normalized)) {
       setMuted(true);
+      syncToBackend({ muted: true });
       notify("AI 已執行：開啟靜音。");
     } else if (/音量/.test(normalized) && number !== null) {
       if (number < 0 || number > 100) {

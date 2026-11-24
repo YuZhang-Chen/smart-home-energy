@@ -1,5 +1,5 @@
 
-import { useEffect, useRef, useState } from "react";
+import { useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import { MathUtils, type Group } from "three";
 
@@ -8,61 +8,19 @@ interface CurtainPanelsProps {
   speed?: number;
 }
 
-const API = "http://127.0.0.1:8001/api/curtain";
-
 const FOLD_COUNT = 12;
 const FOLD_SPACING = 0.15;
 const OPEN_SCALE = 0.2;
 const OPEN_SHIFT = 1.45;
 
 export default function CurtainPanels({
-  position,
+  position = 0,
   speed = 7,
 }: CurtainPanelsProps) {
   const leftRef = useRef<Group>(null);
   const rightRef = useRef<Group>(null);
 
-  const [remotePosition, setRemotePosition] = useState(0);
-
-  // 從 Python API 取得窗簾位置
-  useEffect(() => {
-    if (position !== undefined) return;
-
-    let active = true;
-
-    const loadPosition = async () => {
-      try {
-        const response = await fetch(`${API}/status`);
-
-        if (!response.ok) return;
-
-        const data = await response.json();
-
-        if (active && typeof data.position === "number") {
-          setRemotePosition(
-            MathUtils.clamp(data.position, 0, 100)
-          );
-        }
-      } catch {
-        // API 暫時無法連線時保留目前位置
-      }
-    };
-
-    loadPosition();
-
-    const timer = window.setInterval(loadPosition, 200);
-
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-    };
-  }, [position]);
-
-  const currentPosition = MathUtils.clamp(
-    position ?? remotePosition,
-    0,
-    100
-  );
+  const currentPosition = MathUtils.clamp(position, 0, 100);
 
   const progress = currentPosition / 100;
 

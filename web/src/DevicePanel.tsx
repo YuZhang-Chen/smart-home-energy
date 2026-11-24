@@ -732,9 +732,10 @@ export default function DevicePanel({
   <TVControl
     power={tvPower}
     onPowerChange={onTVPowerChange}
+    tvState={home?.devices["tv-1"]?.state ?? null}
   />
 ) : device.id === "curtain-1" ? (
-  <CurtainControl />
+  <CurtainControl initialStatus={home?.devices["curtain-1"]?.state ?? null} />
 ) : (
   <div className="display-info">
           <Radio size={30} strokeWidth={1.3} />

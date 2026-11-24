@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import "./curtain.css";
 
-const API = "http://127.0.0.1:8001/api/curtain";
+const API = "/api/curtain";
 
 interface CurtainStatus {
   device_id: string;
@@ -46,18 +46,29 @@ async function apiRequest<T>(
   return data as T;
 }
 
-export default function CurtainControl() {
-  const [status, setStatus] = useState<CurtainStatus | null>(null);
-  const [sliderValue, setSliderValue] = useState(0);
+export default function CurtainControl({
+  initialStatus,
+}: {
+  initialStatus?: CurtainStatus | null;
+} = {}) {
+  const [status, setStatus] = useState<CurtainStatus | null>(initialStatus ?? null);
+  const [sliderValue, setSliderValue] = useState(initialStatus?.target ?? 0);
   const editingSlider = useRef(false);
   const [command, setCommand] = useState("");
   const [message, setMessage] = useState("正在連接窗簾設備...");
-  const [connected, setConnected] = useState(false);
+  const [connected, setConnected] = useState(!!initialStatus);
   const [busy, setBusy] = useState(false);
 
   const [scheduleTime, setScheduleTime] = useState("07:00");
   const [schedulePosition, setSchedulePosition] = useState(100);
   const [schedules, setSchedules] = useState<CurtainSchedule[]>([]);
+
+  useEffect(() => {
+    if (!initialStatus) return;
+    setStatus(initialStatus);
+    if (!editingSlider.current) setSliderValue(initialStatus.target);
+    setConnected(true);
+  }, [initialStatus]);
 
   const loadStatus = useCallback(async () => {
     try {
@@ -83,13 +94,16 @@ export default function CurtainControl() {
   useEffect(() => {
     void loadStatus();
     void loadSchedules();
+  }, [loadStatus, loadSchedules]);
 
+  // Only poll while the curtain is actively moving; zero polling when stopped.
+  useEffect(() => {
+    if (status?.status !== "moving") return;
     const timer = window.setInterval(() => {
       void loadStatus();
-    }, 500);
-
+    }, 400);
     return () => window.clearInterval(timer);
-  }, [loadStatus, loadSchedules]);
+  }, [status?.status, loadStatus]);
 
   const moveTo = async (nextPosition: number) => {
     setBusy(true);

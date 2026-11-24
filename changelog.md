@@ -2,6 +2,27 @@
 
 記錄各版本的重要變更，最新版本放最上方。格式參考 [Sample CHANGELOG](https://gist.github.com/juampynr/4c18214a8eb554084e21d6e288a18a2c)，使用版本號、日期及 Added／Changed／Fixed 分類；版本 commit 以對應的 `v{版本號}:` 開頭。既有未編版紀錄保留原標題。
 
+## [1.6.0] - 2026-11-24
+
+將虛擬窗簾與智慧電視統一掛載至 FastAPI 8502 單一服務入口、併入 `/api/home` 家庭狀態樹，並擴充 Multi-Agent 家庭助理對話視窗支援電視與窗簾控制。對應 commit：`v1.6.0: unify TV and curtain into 8502 API, /api/home snapshot, and household assistant`。
+
+### Added
+
+- 新增虛擬電視同源 API（`tv.py`，`/api/tv/*`）與窗簾同源路由掛載（`curtain.py`，`/api/curtain/*`），支援跨程序狀態持久化同步（`curtain_state.json`、`tv_state.json`）。
+- 擴充 `multi_agent.py` 支援 `TV Agent`（`tv-1`）與 `Curtain Agent`（`curtain-1`）單一指令快速直通與跨設備協同委派（如「開窗簾並且關燈」），並將執行紀錄寫入診斷日誌。
+- 3D 客廳新增窗簾動態開合模型（`CurtainPanels.tsx`）以及電視／窗簾操作抽屜面板（`TVControl.tsx`、`CurtainControl.tsx`），同時保留面板內的本機指令輸入框。
+
+### Changed
+
+- `/api/home` 統一回傳 `curtain-1` 與 `tv-1` 設備狀態快照；移除 `App.tsx`、`CurtainPanels.tsx` 與 `TVControl.tsx` 中各自獨立的高頻常駐輪詢（0.2s–1.5s），改由 `useHome` 狀態樹統一驅動 3D 場景與控制面板。
+- 窗簾排程執行緒隨 `8502` 主服務自動啟動，不再需要額外啟動 `8001` 埠的獨立窗簾 Server。
+
+### Validation
+
+- Python `test_api.py` 與 `test_light_agent.py` 通過（含同源 `/api/curtain`、`/api/tv` 及「開窗簾並且關燈」跨程序 Multi-Agent 同步測試）。
+- 前端 Vitest 23 項互動測試與 Vite 正式建置通過。
+
+
 ## [1.5.0] - 2026-11-04
 
 完成 Light Agent 明確照明指令到虛擬燈泡的控制與回報串接。對應 commit：`v1.5.0: connect Light Agent feedback and prioritize newer commands`。

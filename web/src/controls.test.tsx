@@ -421,13 +421,19 @@ describe("accessible scene controls", () => {
         "false",
       ),
     );
-    for (const name of ["電視", "窗簾", "電風扇"]) {
-      await user.click(
-        screen.getByRole("button", { name: `${name} 資訊展示` }),
-      );
-      expect(screen.getByRole("heading", { name })).toBeInTheDocument();
-      expect(screen.getByText(/尚未串接設備服務/)).toBeInTheDocument();
-    }
+    await user.click(screen.getByRole("button", { name: "電視 資訊展示" }));
+    expect(screen.getByText("LG Smart TV")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "開啟電視" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /窗簾/ }));
+    expect(screen.getByText("智慧窗簾")).toBeInTheDocument();
+    expect(screen.getByText("Curtain Agent")).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: "電風扇 資訊展示" }),
+    );
+    expect(screen.getByRole("heading", { name: "電風扇" })).toBeInTheDocument();
+    expect(screen.getByText(/尚未串接設備服務/)).toBeInTheDocument();
     expect(screen.getByText("FAN")).toBeInTheDocument();
     expect(screen.getByText("客廳 · 右側")).toBeInTheDocument();
     expect(

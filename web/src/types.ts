@@ -162,10 +162,43 @@ export interface BulbSnapshot {
   active_task: null;
   latest_task: null;
 }
+export interface CurtainState {
+  device_id: "curtain-1";
+  position: number;
+  target: number;
+  status: "moving" | "stopped";
+  updated_at: string;
+  duration_seconds?: number;
+}
+export interface CurtainSnapshot {
+  state: CurtainState | null;
+  fresh: boolean;
+  active_task: null;
+  latest_task: null;
+}
+export interface TVState {
+  device_id: "tv-1";
+  power: boolean;
+  volume: number;
+  muted: boolean;
+  input: "HDMI1" | "HDMI2" | "HDMI3" | "HDMI4";
+  playback: "playing" | "paused" | "stopped";
+  updated_at: string;
+}
+export interface TVSnapshot {
+  state: TVState | null;
+  fresh: boolean;
+  active_task: null;
+  latest_task: null;
+}
 export interface Home {
   server_time: string;
   clock: { now: string; speed: number; clock_id: string };
-  devices: Record<LiveId, DeviceSnapshot> & { "bulb-1": BulbSnapshot };
+  devices: Record<LiveId, DeviceSnapshot> & {
+    "bulb-1": BulbSnapshot;
+    "curtain-1"?: CurtainSnapshot;
+    "tv-1"?: TVSnapshot;
+  };
   preferences: {
     target_c: number;
     minimum_c: number;

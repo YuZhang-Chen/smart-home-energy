@@ -16,7 +16,7 @@ from threading import Event, RLock, Thread
 from time import monotonic
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException
+from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -25,6 +25,7 @@ stop_event = Event()
 
 # Keep curtain data separate from the rest of the smart-home project.
 DATA_FILE = Path(__file__).resolve().parents[2] / "artifacts" / "runtime" / "curtain_schedules.json"
+STATE_FILE = Path(__file__).resolve().parents[2] / "artifacts" / "runtime" / "curtain_state.json"
 
 state = {
     "device_id": "curtain-1",
@@ -35,6 +36,37 @@ state = {
 }
 schedules: dict[str, dict] = {}
 last_tick = monotonic()
+
+
+def _load_state_unlocked() -> None:
+    global last_tick
+    if not STATE_FILE.exists():
+        return
+    try:
+        raw = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            return
+        prev_updated = state.get("updated_at")
+        new_updated = raw.get("updated_at")
+        if new_updated != prev_updated:
+            state["position"] = float(raw.get("position", state["position"]))
+            state["target"] = float(raw.get("target", state["target"]))
+            state["status"] = str(raw.get("status", state["status"]))
+            state["duration_seconds"] = float(raw.get("duration_seconds", 2.0))
+            state["updated_at"] = str(new_updated or datetime.now().astimezone().isoformat())
+            last_tick = monotonic()
+    except (OSError, ValueError, TypeError):
+        pass
+
+
+def _save_state_unlocked() -> None:
+    try:
+        STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        temp = STATE_FILE.with_name(STATE_FILE.name + ".tmp")
+        temp.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+        temp.replace(STATE_FILE)
+    except OSError:
+        pass
 
 
 def load_schedules() -> None:
@@ -82,11 +114,18 @@ def save_schedules() -> None:
 
 
 def tick():
-    """Advance the virtual curtain according to elapsed time."""
+    """Advance the virtual curtain according to elapsed time across processes."""
     global last_tick
     with lock:
+        _load_state_unlocked()
         now = monotonic()
         elapsed = max(0.0, min(now - last_tick, 1.0))
+        try:
+            wall_elapsed = (datetime.now().astimezone() - datetime.fromisoformat(str(state["updated_at"]))).total_seconds()
+            if wall_elapsed > elapsed:
+                elapsed = min(wall_elapsed, 10.0)
+        except (ValueError, TypeError):
+            pass
         last_tick = now
         if state["status"] != "moving":
             return
@@ -100,6 +139,7 @@ def tick():
         else:
             state["position"] += (1 if distance > 0 else -1) * step
         state["updated_at"] = datetime.now().astimezone().isoformat()
+        _save_state_unlocked()
 
 
 def move_to(position: float, duration: float = 2.0):
@@ -107,12 +147,13 @@ def move_to(position: float, duration: float = 2.0):
     with lock:
         state["target"] = float(position)
         state["duration_seconds"] = float(duration)
-        if abs(state["target"] - state["position"]) < 0.01:
+        if duration <= 0 or abs(state["target"] - state["position"]) < 0.01:
             state["position"] = state["target"]
             state["status"] = "stopped"
         else:
             state["status"] = "moving"
         state["updated_at"] = datetime.now().astimezone().isoformat()
+        _save_state_unlocked()
         return dict(state)
 
 
@@ -128,22 +169,40 @@ def stop_curtain():
         state["target"] = state["position"]
         state["status"] = "stopped"
         state["updated_at"] = datetime.now().astimezone().isoformat()
+        _save_state_unlocked()
         return dict(state)
 
 
 def execute_command(command: str):
     text = command.replace(" ", "")
+    # Support schedule creation via natural language, e.g. "排程 07:00 全開"
+    time_match = re.search(r"((?:[01]\d|2[0-3]):[0-5]\d)", text)
+    if time_match and any(word in text for word in ("排程", "定時", "每天", "預約")):
+        target_pos = 100.0
+        if any(word in text for word in ("半開", "一半", "50%")):
+            target_pos = 50.0
+        elif any(word in text for word in ("全關", "關閉", "關上", "拉上", "0%")):
+            target_pos = 0.0
+        else:
+            pct = re.search(r"(\d{1,3})%", text)
+            if pct:
+                target_pos = float(min(100, int(pct.group(1))))
+        create_schedule(ScheduleRequest(time=time_match.group(1), position=target_pos, enabled=True))
+        return get_status()
     if any(word in text for word in ("停止", "暫停", "停下")):
         return stop_curtain()
     if any(word in text for word in ("半開", "一半", "半關")):
         return move_to(50)
-    if any(word in text for word in ("全開", "打開", "開啟", "拉開")):
+    pct_match = re.search(r"(\d{1,3})\s*(?:%|％|成)", text)
+    if pct_match:
+        raw_val = int(pct_match.group(1))
+        if "成" in pct_match.group(0) and raw_val <= 10:
+            raw_val *= 10
+        return move_to(min(100, raw_val))
+    if any(word in text for word in ("全開", "打開", "開啟", "拉開", "開窗簾")):
         return move_to(100)
-    if any(word in text for word in ("全關", "關閉", "關上", "拉上")):
+    if any(word in text for word in ("全關", "關閉", "關上", "拉上", "關窗簾", "關掉")):
         return move_to(0)
-    match = re.search(r"(\d{1,3})%", text)
-    if match:
-        return move_to(min(100, int(match.group(1))))
     raise ValueError("無法辨識窗簾指令")
 
 
@@ -173,37 +232,36 @@ def scheduler_loop():
         stop_event.wait(1.0)
 
 
+_scheduler_thread: Thread | None = None
+
+
+def ensure_scheduler_started() -> None:
+    global _scheduler_thread
+    with lock:
+        if not schedules:
+            try:
+                load_schedules()
+            except RuntimeError:
+                pass
+        if _scheduler_thread is None or not _scheduler_thread.is_alive():
+            stop_event.clear()
+            _scheduler_thread = Thread(target=scheduler_loop, name="curtain-scheduler", daemon=True)
+            _scheduler_thread.start()
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     load_schedules()
-    stop_event.clear()
-    worker = Thread(target=scheduler_loop, name="curtain-scheduler", daemon=True)
-    worker.start()
+    ensure_scheduler_started()
     try:
         yield
     finally:
         stop_event.set()
-        worker.join(timeout=3)
+        if _scheduler_thread is not None:
+            _scheduler_thread.join(timeout=3)
 
 
-app = FastAPI(
-    title="Virtual Curtain Agent",
-    description="Independent virtual curtain control API",
-    version="1.1.0",
-    lifespan=lifespan,
-)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:8502",
-        "http://127.0.0.1:8502",
-    ],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+router = APIRouter(prefix="/api/curtain", tags=["curtain"])
 
 
 class PositionRequest(BaseModel):
@@ -225,27 +283,27 @@ class ScheduleRequest(BaseModel):
     enabled: bool = True
 
 
-@app.get("/api/curtain/health")
+@router.get("/health")
 def health():
     return {"service": "Virtual Curtain Agent", "status": "online"}
 
 
-@app.get("/api/curtain/status")
+@router.get("/status")
 def curtain_status():
     return get_status()
 
 
-@app.post("/api/curtain/position")
+@router.post("/position")
 def curtain_position(request: PositionRequest):
     return move_to(request.position, request.duration_seconds)
 
 
-@app.post("/api/curtain/stop")
+@router.post("/stop")
 def curtain_stop():
     return stop_curtain()
 
 
-@app.post("/api/curtain/scene")
+@router.post("/scene")
 def curtain_scene(request: SceneRequest):
     scenes = {"open": 100, "half": 50, "close": 0}
     if request.scene not in scenes:
@@ -253,7 +311,7 @@ def curtain_scene(request: SceneRequest):
     return move_to(scenes[request.scene])
 
 
-@app.post("/api/curtain/command")
+@router.post("/command")
 def curtain_command(request: CommandRequest):
     try:
         return execute_command(request.command)
@@ -261,13 +319,13 @@ def curtain_command(request: CommandRequest):
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
-@app.get("/api/curtain/schedules")
+@router.get("/schedules")
 def list_schedules():
     with lock:
         return [dict(item) for item in schedules.values()]
 
 
-@app.post("/api/curtain/schedules")
+@router.post("/schedules")
 def create_schedule(request: ScheduleRequest):
     if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", request.time):
         raise HTTPException(status_code=400, detail="時間格式錯誤，請使用 HH:MM")
@@ -289,7 +347,7 @@ def create_schedule(request: ScheduleRequest):
         return dict(item)
 
 
-@app.delete("/api/curtain/schedules/{schedule_id}")
+@router.delete("/schedules/{schedule_id}")
 def delete_schedule(schedule_id: str):
     with lock:
         if schedule_id not in schedules:
@@ -303,7 +361,7 @@ def delete_schedule(schedule_id: str):
         return {"success": True, "message": "排程已刪除"}
 
 
-@app.post("/api/curtain/schedules/{schedule_id}/toggle")
+@router.post("/schedules/{schedule_id}/toggle")
 def toggle_schedule(schedule_id: str):
     with lock:
         item = schedules.get(schedule_id)
@@ -316,3 +374,24 @@ def toggle_schedule(schedule_id: str):
             item["enabled"] = not item["enabled"]
             raise HTTPException(status_code=500, detail=f"排程儲存失敗：{exc}") from exc
         return dict(item)
+
+
+app = FastAPI(
+    title="Virtual Curtain Agent",
+    description="Independent virtual curtain control API",
+    version="1.1.0",
+    lifespan=lifespan,
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:8502",
+        "http://127.0.0.1:8502",
+    ],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+app.include_router(router)

@@ -192,7 +192,10 @@ async def device_session(repo, event, task, budget, parent_id):
 
 
 _AC_DEVICE_RE = re.compile(r"冷氣|空調|空调|air\s*conditioner|\bac\b", re.I)
-_AC_OTHER_DEVICE_RE = re.compile(r"洗衣機|洗衣|燈泡|照明|燈|washer|bulb|light", re.I)
+_AC_OTHER_DEVICE_RE = re.compile(r"洗衣機|洗衣|燈泡|照明|燈|電視|窗簾|washer|bulb|light|tv|curtain", re.I)
+_TV_DEVICE_RE = re.compile(r"電視|电视|\btv\b|hdmi|音量|靜音", re.I)
+_CURTAIN_DEVICE_RE = re.compile(r"窗簾|窗帘|curtain|blinds", re.I)
+_ENERGY_DEVICE_RE = re.compile(r"冷氣|空調|洗衣機|洗衣|燈泡|照明|燈|air\s*conditioner|\bac\b|washer|bulb|light", re.I)
 _AC_ACTION_RE = re.compile(r"開啟|打開|開冷氣|開機|開到|開成|啟動|設定|設為|設成|調整|調到|調為|調成|運轉|運行|(?<!關)開(?!始)|turn\s*on|set|adjust", re.I)
 _AC_OFF_RE = re.compile(r"關閉|關掉|關冷氣|冷氣關掉|冷氣關閉|停止|關機|turn\s*off", re.I)
 _AC_QUERY_RE = re.compile(r"查詢|查看|目前狀態|狀態如何|現在狀態|幾度|多少度|耗電|電費|是否|有沒有|是不是|嗎", re.I)
@@ -476,6 +479,103 @@ def run_explicit_ac_stop_request(repo, event, parent_id, root_id, monotonic=time
     return encode(run)
 
 
+def is_explicit_tv_only_request(text: str) -> bool:
+    if not isinstance(text, str) or not _TV_DEVICE_RE.search(text):
+        return False
+    if _ENERGY_DEVICE_RE.search(text) or _CURTAIN_DEVICE_RE.search(text):
+        return False
+    return True
+
+
+def is_explicit_curtain_only_request(text: str) -> bool:
+    if not isinstance(text, str) or not _CURTAIN_DEVICE_RE.search(text):
+        return False
+    if _ENERGY_DEVICE_RE.search(text) or _TV_DEVICE_RE.search(text):
+        return False
+    return True
+
+
+def run_tv_agent(repo, event, parent_id, root_id, text: str, monotonic=time.monotonic, progress=None):
+    """Execute a TV command via TV Agent and log durable diagnostics."""
+    from smart_home_energy import tv
+    started = monotonic()
+    run_id = uuid4().hex
+    provider = "deterministic-tv-agent"
+    status = "failed"
+    message = "電視指令未完成"
+    identifier = sha256(f"{root_id}:tv-1".encode()).hexdigest()
+
+    if progress:
+        progress("TV Agent 正在執行客廳電視控制指令")
+    try:
+        outcome = tv.execute_command(text)
+        status = "completed"
+        message = str(outcome["message"])
+        repo.log_tool(run_id, {
+            "role": "TV Agent", "provider": provider, "device_id": "tv-1",
+            "action": {"tool": "control_tv", "arguments": {"command": text}, "summary": "執行電視控制與狀態同步"},
+            "result": outcome["status"],
+        })
+    except ValueError as error:
+        message = str(error)
+        status = "needs_details"
+        repo.log_tool(run_id, {"role": "TV Agent", "provider": provider, "device_id": "tv-1", "error": message})
+
+    run = AgentRun(run_id, event.event_id, status, provider, 0, monotonic() - started, message, parent_id, "tv-1", "TV Agent")
+    repo.record_run(run)
+    result = encode(run)
+    with repo.transaction() as db:
+        db.execute(
+            "INSERT OR REPLACE INTO delegations VALUES (?,?,?,?,?)",
+            (identifier, root_id, "tv-1", None, json.dumps({"request_id": identifier, "result": result})),
+        )
+    return result
+
+
+def run_curtain_agent(repo, event, parent_id, root_id, text: str, monotonic=time.monotonic, progress=None):
+    """Execute a curtain command via Curtain Agent and log durable diagnostics."""
+    from smart_home_energy import curtain
+    started = monotonic()
+    run_id = uuid4().hex
+    provider = "deterministic-curtain-agent"
+    status = "failed"
+    message = "窗簾指令未完成"
+    identifier = sha256(f"{root_id}:curtain-1".encode()).hexdigest()
+
+    if progress:
+        progress("Curtain Agent 正在執行客廳窗簾控制指令")
+    try:
+        state = curtain.execute_command(text)
+        status = "completed"
+        target = round(float(state.get("target", state.get("position", 0))))
+        if state.get("status") == "stopped" and "停" in text:
+            message = f"客廳窗簾已停止移動，目前位置 {round(float(state.get('position', 0)))}%。"
+        elif any(word in text for word in ("排程", "定時", "每天", "預約")):
+            message = f"已為客廳窗簾設定自動排程（目標位置 {target}%）。"
+        else:
+            label = "全開 (100%)" if target >= 99 else "全關 (0%)" if target <= 1 else f"開啟 {target}%"
+            message = f"客廳窗簾已執行指令：移動至 {label}。"
+        repo.log_tool(run_id, {
+            "role": "Curtain Agent", "provider": provider, "device_id": "curtain-1",
+            "action": {"tool": "control_curtain", "arguments": {"command": text}, "summary": "執行窗簾開合或排程控制"},
+            "result": state,
+        })
+    except ValueError as error:
+        message = str(error)
+        status = "needs_details"
+        repo.log_tool(run_id, {"role": "Curtain Agent", "provider": provider, "device_id": "curtain-1", "error": message})
+
+    run = AgentRun(run_id, event.event_id, status, provider, 0, monotonic() - started, message, parent_id, "curtain-1", "Curtain Agent")
+    repo.record_run(run)
+    result = encode(run)
+    with repo.transaction() as db:
+        db.execute(
+            "INSERT OR REPLACE INTO delegations VALUES (?,?,?,?,?)",
+            (identifier, root_id, "curtain-1", None, json.dumps({"request_id": identifier, "result": result})),
+        )
+    return result
+
+
 async def run_household(repo, event, hems, providers=None, monotonic=time.monotonic, progress=None):
     run_id, started = uuid4().hex, monotonic()
     results, status, message = [], "failed", "家庭工作未完成，請使用各設備表單"
@@ -522,13 +622,21 @@ async def run_household(repo, event, hems, providers=None, monotonic=time.monoto
             result = run_explicit_ac_request(repo, event, hems, run_id, root_id, ac_target, monotonic, report)
             results.append(result)
             status, message = result["status"], result["message"]
+        elif is_explicit_tv_only_request(event.payload.get("text", "")):
+            result = run_tv_agent(repo, event, run_id, root_id, event.payload.get("text", ""), monotonic, report)
+            results.append(result)
+            status, message = result["status"], result["message"]
+        elif is_explicit_curtain_only_request(event.payload.get("text", "")):
+            result = run_curtain_agent(repo, event, run_id, root_id, event.payload.get("text", ""), monotonic, report)
+            results.append(result)
+            status, message = result["status"], result["message"]
         else:
             budget.providers = configured_providers() if providers is None else providers
             system = """你是智慧家庭 Main Agent，使用繁體中文，每次只回一個 JSON 物件。
 工具 {"tool":"get_home_state","arguments":{},"summary":"摘要"}。
 可用 get_agent_roles={} 查詢角色權責。
-批次委派 {"tool":"delegate_tasks","arguments":{"requests":[{"device_id":"washer-1、ac-1 或 bulb-1","text":"完整原始需求中與該設備相關的條件","task_id":"僅修改冷氣或洗衣現有任務時填入","expected_version":1}]},"summary":"摘要"}。
-同一需求可委派三台設備，各自失敗；冷氣與洗衣各自核准，明確照明需求由 Light Agent 直接排入控制佇列並等待回報。使用者已同意預設：開冷氣27°C、一小時、確認後開始；洗衣24小時內完成、避開23:00–07:00並選較便宜時段。不因未填時間而補問，將完整需求交給子 Agent 套用偏好。
+批次委派 {"tool":"delegate_tasks","arguments":{"requests":[{"device_id":"washer-1、ac-1、bulb-1、tv-1 或 curtain-1","text":"完整原始需求中與該設備相關的條件","task_id":"僅修改冷氣或洗衣現有任務時填入","expected_version":1}]},"summary":"摘要"}。
+同一需求可委派多台設備，各自失敗；冷氣與洗衣各自核准，明確照明需求由 Light Agent 直接排入控制佇列並等待回報，電視（tv-1）與窗簾（curtain-1）由 TV Agent 與 Curtain Agent 直接執行。使用者已同意預設：開冷氣27°C、一小時、確認後開始；洗衣24小時內完成、避開23:00–07:00並選較便宜時段。不因未填時間而補問，將完整需求交給子 Agent 套用偏好。
 這些數字是初始偏好，以 get_home_state 的 preferences 為準。委派 text 保留使用者原文及明確條件，不把未說出的初始數字當成使用者指定值。
 若設備已有待補充、待核准或未啟動任務，修改同設備必須傳 task_id 與 expected_version，不新增第二個任務；未提及的設備保持原樣。缺正式費率基準等必要資訊才補問，向使用者說明需要哪個月份、多少度，不要求填JSON。
 task_id 只能取自 get_home_state.tasks 的未完成任務；設備回報可能仍帶有上次已結束的行程，不能當成目前任務。tasks 沒有該設備時，委派請省略 task_id 和 expected_version。
@@ -567,17 +675,25 @@ task_id 只能取自 get_home_state.tasks 的未完成任務；設備回報可�
                         result = agent_roles()
                     elif action["tool"] == "delegate_tasks" and set(action["arguments"]) == {"requests"}:
                         requests = action["arguments"]["requests"]
-                        if not isinstance(requests, list) or not 1 <= len(requests) <= 3 or len({r["device_id"] for r in requests}) != len(requests):
-                            raise ValueError("一次委派一至三台不同設備")
+                        if not isinstance(requests, list) or not 1 <= len(requests) <= 5 or len({r["device_id"] for r in requests}) != len(requests):
+                            raise ValueError("一次委派一至五台不同設備")
                         for item in requests:
-                            if item.get("device_id") != "bulb-1" and item.get("task_id") and repo.task(item["task_id"]).status in {"completed", "cancelled", "aborted", "resolved"}:
+                            if item.get("device_id") not in {"bulb-1", "tv-1", "curtain-1"} and item.get("task_id") and repo.task(item["task_id"]).status in {"completed", "cancelled", "aborted", "resolved"}:
                                 raise ValueError("指定的是已結束任務，請重新讀取 get_home_state；沒有未完成任務的設備須省略 task_id 以建立新計畫")
                         for request in requests:
                             device = request["device_id"]
-                            if device not in {"washer-1", "ac-1", "bulb-1"} or not isinstance(request.get("text"), str):
+                            if device not in {"washer-1", "ac-1", "bulb-1", "tv-1", "curtain-1"} or not isinstance(request.get("text"), str):
                                 raise ValueError("設備或需求不合法")
                             identifier = sha256(f"{root_id}:{device}".encode()).hexdigest()
                             try:
+                                if device == "tv-1":
+                                    result = run_tv_agent(repo, event, run_id, root_id, request["text"], monotonic, report)
+                                    results.append(result)
+                                    continue
+                                if device == "curtain-1":
+                                    result = run_curtain_agent(repo, event, run_id, root_id, request["text"], monotonic, report)
+                                    results.append(result)
+                                    continue
                                 if device == "bulb-1":
                                     # A bulb action is immediate and has no scheduler task.
                                     # Models sometimes copy task_id/expected_version from the
