@@ -74,6 +74,53 @@ export default function App() {
   );
   useConfigureSuggestions(suggestionConfig);
   const [selected, setSelected] = useState<DeviceId>("ac-1");
+  const [tvPower, setTvPower] = useState(false);
+  const [curtainStatus, setCurtainStatus] = useState<{
+    position: number;
+    target: number;
+    status: string;
+  } | null>(null);
+
+  useEffect(() => {
+    let active = true;
+
+    const readCurtainStatus = async () => {
+      try {
+        const response = await fetch(
+          "http://127.0.0.1:8001/api/curtain/status",
+          { cache: "no-store" }
+        );
+
+        if (!response.ok) throw new Error("Curtain API unavailable");
+
+        const data = await response.json();
+
+        if (
+          active &&
+          typeof data.position === "number" &&
+          typeof data.target === "number" &&
+          typeof data.status === "string"
+        ) {
+          setCurtainStatus({
+            position: data.position,
+            target: data.target,
+            status: data.status,
+          });
+        }
+      } catch {
+        if (active) setCurtainStatus(null);
+      }
+    };
+
+    void readCurtainStatus();
+
+    const timer = window.setInterval(readCurtainStatus, 1000);
+
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, []);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(true);
   const [page, setPage] = useState<"room" | "energy" | "settings" | "diagnostics">("room");
@@ -156,6 +203,21 @@ export default function App() {
     if (item.id === "bulb-1")
       return !bulb?.state ? "等待回報" : !isFresh(bulb, realNow)
         ? "回報過期" : lightOn ? "燈光已開啟" : "燈光已關閉";
+    if (item.id === "curtain-1") {
+      if (!curtainStatus) return "等待連線";
+
+      const { position, target, status } = curtainStatus;
+
+      if (status === "moving") {
+        if (target > position + 0.5) return "開啟中";
+        if (target < position - 0.5) return "關閉中";
+      }
+
+      if (position <= 1) return "全關";
+      if (position >= 99) return "全開";
+
+      return `半開 ${Math.round(position)}%`;
+    }
     if (item.id !== "ac-1" && item.id !== "washer-1") return "資訊展示";
     const snapshot = home?.devices[item.id];
     if (!snapshot?.state) return "等待連線";
@@ -360,7 +422,7 @@ export default function App() {
             </div>
           </div>
         </div>
-        {drawerOpen && <div className="drawer-scrim" onMouseDown={(event) => { if (event.target === event.currentTarget) setDrawerOpen(false); }}><div ref={drawer} className="device-drawer" role="dialog" aria-modal="true" aria-label={`${device.name}設備控制`}><div className="drawer-heading"><b>{device.name}設備控制</b><button onClick={() => setDrawerOpen(false)} aria-label="關閉設備控制">×</button></div><DevicePanel key={selected} device={device} home={home} realNow={realNow} lightOn={lightOn} setLightOn={(on) => submit("set_bulb", { device_id: "bulb-1", power: on })} submit={submit} busy={!!pending} connected={!!home && !error} /></div></div>}
+        {drawerOpen && <div className="drawer-scrim" onMouseDown={(event) => { if (event.target === event.currentTarget) setDrawerOpen(false); }}><div ref={drawer} className="device-drawer" role="dialog" aria-modal="true" aria-label={`${device.name}設備控制`}><div className="drawer-heading"><b>{device.name}設備控制</b><button onClick={() => setDrawerOpen(false)} aria-label="關閉設備控制">×</button></div><DevicePanel key={selected} device={device} home={home} realNow={realNow} lightOn={lightOn} setLightOn={(on) => submit("set_bulb", { device_id: "bulb-1", power: on })} tvPower={tvPower} onTVPowerChange={setTvPower} submit={submit} busy={!!pending} connected={!!home && !error} /></div></div>}
         </>}
       </main>
       <footer>
