@@ -421,7 +421,7 @@ describe("accessible scene controls", () => {
         "false",
       ),
     );
-    await user.click(screen.getByRole("button", { name: "電視 資訊展示" }));
+    await user.click(screen.getByRole("button", { name: /電視/ }));
     expect(screen.getByText("LG Smart TV")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "開啟電視" })).toBeInTheDocument();
 

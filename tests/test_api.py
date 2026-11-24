@@ -221,6 +221,7 @@ class ApiTests(unittest.TestCase):
                     {'device_id': 'bulb-1', 'text': '關燈'},
                 ],
             ),
+            action('set_curtain_position', device_id='curtain-1', position=100, duration_seconds=2.0),
             action('submit_light_action', device_id='bulb-1', power=False, duration_seconds=0),
         ]
         run = asyncio.run(run_household(self.repo, self.repo.claim_event(), self.hems, [FakeModel(replies)]))
@@ -246,6 +247,68 @@ class ApiTests(unittest.TestCase):
         transport.inbox.extend([('result', bulb.handle(command, self.real)), ('state', bulb.tick(self.real))])
         control.tick(self.real)
         self.assertFalse(self.repo.device('bulb-1')['power'])
+
+    def test_hierarchical_main_agent_delegates_to_llm_tv_and_curtain_agents_with_scope_enforcement(self):
+        import asyncio
+        from smart_home_energy.curtain import CurtainTools
+        from smart_home_energy.multi_agent import run_household
+        from smart_home_energy.tv import TVTools
+        from test_agent import FakeModel, action
+
+        # 1. Verify strict device scope boundaries on TVTools and CurtainTools
+        tv_tools = TVTools(self.repo, 'scope-check', '開電視')
+        with self.assertRaises(ValueError):
+            tv_tools.call('control_tv', {'device_id': 'ac-1', 'power': True})
+        curtain_tools = CurtainTools(self.repo, 'scope-check', '拉上窗簾')
+        with self.assertRaises(ValueError):
+            curtain_tools.call('set_curtain_position', {'device_id': 'bulb-1', 'position': 0})
+
+        # 2. Hierarchical Main Agent -> Curtain Agent (LLM) + TV Agent (LLM) on contextual prompt
+        self.repo.event(
+            'household:cinema-context',
+            None,
+            {
+                'root_id': 'cinema-context',
+                'text': '外面陽光太刺眼了幫我擋光，另外想看電影但電視太吵幫我調小聲並切到第二個 HDMI',
+            },
+        )
+        replies = [
+            action('get_home_state'),
+            action(
+                'delegate_tasks',
+                requests=[
+                    {'device_id': 'curtain-1', 'text': '外面陽光太刺眼了幫我擋光'},
+                    {'device_id': 'tv-1', 'text': '想看電影但電視太吵幫我調小聲並切到第二個 HDMI'},
+                ],
+            ),
+            action('set_curtain_position', device_id='curtain-1', position=0, duration_seconds=0),
+            action(
+                'control_tv',
+                device_id='tv-1',
+                power=True,
+                input='HDMI2',
+                volume=15,
+                playback='playing',
+            ),
+        ]
+        main_run = asyncio.run(run_household(self.repo, self.repo.claim_event(), self.hems, [FakeModel(replies)]))
+        self.assertEqual(main_run.status, 'completed')
+        self.assertEqual(main_run.requests, 4)
+
+        # Verify /api/home snapshot reflects both LLM device agent actions
+        home_snapshot = self.client.get('/api/home').json()
+        self.assertEqual(home_snapshot['devices']['curtain-1']['state']['position'], 0.0)
+        self.assertTrue(home_snapshot['devices']['tv-1']['state']['power'])
+        self.assertEqual(home_snapshot['devices']['tv-1']['state']['input'], 'HDMI2')
+        self.assertEqual(home_snapshot['devices']['tv-1']['state']['volume'], 15)
+        self.assertEqual(home_snapshot['devices']['tv-1']['state']['playback'], 'playing')
+
+        # Verify parent-child hierarchy in agent_runs (Main Agent parent -> Curtain Agent & TV Agent children)
+        runs = [json.loads(r['data']) for r in self.repo.records('agent_runs', 20)]
+        children = [r for r in runs if r.get('parent_id') == main_run.run_id]
+        self.assertEqual({c['role'] for c in children}, {'Curtain Agent', 'TV Agent'})
+        self.assertEqual({c['device_id'] for c in children}, {'curtain-1', 'tv-1'})
+        self.assertTrue(all(c['provider'] == 'fake' and c['requests'] == 1 for c in children))
 
 
 if __name__ == '__main__':

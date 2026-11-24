@@ -514,6 +514,7 @@ export default function DevicePanel({
   submit,
   busy,
   connected,
+  onRefresh,
 }: {
   device: SceneDevice;
   home: Home | null;
@@ -527,6 +528,7 @@ export default function DevicePanel({
   submit: Submit;
   busy: boolean;
   connected: boolean;
+  onRefresh?: () => void;
 }) {
   const live =
     device.id === "ac-1" || device.id === "washer-1" ? device.id : null;
@@ -733,6 +735,7 @@ export default function DevicePanel({
     power={tvPower}
     onPowerChange={onTVPowerChange}
     tvState={home?.devices["tv-1"]?.state ?? null}
+    onRefresh={onRefresh}
   />
 ) : device.id === "curtain-1" ? (
   <CurtainControl initialStatus={home?.devices["curtain-1"]?.state ?? null} />

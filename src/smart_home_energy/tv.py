@@ -1,11 +1,13 @@
 """Virtual TV control API and natural-language command parser."""
 
 from datetime import datetime
+import inspect
 import json
 from pathlib import Path
 import re
 from threading import RLock
 from typing import Literal
+from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -186,6 +188,230 @@ def execute_command(command: str) -> dict[str, object]:
             "status": get_status(),
             "message": "客廳電視已執行：" + "、".join(dict.fromkeys(actions)) + "。",
         }
+
+
+class TVTools:
+    """Device-scoped tools for TV Agent (`tv-1` only)."""
+
+    def __init__(self, repo, root_id: str, original_text: str):
+        self.repo = repo
+        self.root_id = root_id
+        self.original_text = original_text
+
+    def get_tv_context(self) -> dict[str, object]:
+        return {
+            "device_id": "tv-1",
+            "state": get_status(),
+            "supported_inputs": ["HDMI1", "HDMI2", "HDMI3", "HDMI4"],
+            "supported_playback": ["playing", "paused", "stopped"],
+            "volume_range": [0, 100],
+            "scope": "只能依使用者需求控制客廳智慧電視 tv-1",
+        }
+
+    def control_tv(
+        self,
+        device_id: str = "tv-1",
+        power: bool | None = None,
+        volume: int | None = None,
+        muted: bool | None = None,
+        input: InputSource | None = None,
+        playback: PlaybackState | None = None,
+    ) -> dict[str, object]:
+        if device_id != "tv-1":
+            raise ValueError("TV Agent 只能控制 tv-1")
+        if all(val is None for val in (power, volume, muted, input, playback)):
+            raise ValueError("control_tv 至少需指定一項電視控制參數")
+        if power is not None and type(power) is not bool:
+            raise ValueError("power 須為布林值")
+        if muted is not None and type(muted) is not bool:
+            raise ValueError("muted 須為布林值")
+        if volume is not None:
+            if type(volume) is bool or not isinstance(volume, (int, float)) or not 0 <= int(volume) <= 100:
+                raise ValueError("電視音量範圍為 0～100")
+            volume = int(volume)
+        if input is not None and input not in {"HDMI1", "HDMI2", "HDMI3", "HDMI4"}:
+            raise ValueError("訊號來源僅支援 HDMI1 至 HDMI4")
+        if playback is not None and playback not in {"playing", "paused", "stopped"}:
+            raise ValueError("播放狀態僅支援 playing、paused、stopped")
+
+        current = get_status()
+        effective_power = power
+        # Automatically turn on the TV when the user requests active media/input/volume changes
+        if effective_power is None and not current["power"] and (
+            input is not None or volume is not None or playback == "playing"
+        ):
+            effective_power = True
+
+        updated = update_tv(
+            power=effective_power,
+            volume=volume,
+            muted=muted,
+            input_source=input,
+            playback=playback,
+        )
+        changes: list[str] = []
+        if effective_power is True and not current["power"]:
+            changes.append("開啟電視")
+        elif effective_power is False:
+            changes.append("關閉電視（進入待機）")
+        if input is not None:
+            changes.append(f"切換至 {input}")
+        if volume is not None:
+            changes.append(f"音量設為 {volume}%")
+        if muted is True:
+            changes.append("開啟靜音")
+        elif muted is False and power is None and volume is None:
+            changes.append("解除靜音")
+        if playback is not None and updated["power"]:
+            play_labels = {"playing": "開始播放", "paused": "暫停播放", "stopped": "停止播放"}
+            changes.append(play_labels[playback])
+
+        summary_msg = (
+            "客廳電視已執行：" + "、".join(changes) + "。"
+            if changes
+            else f"客廳電視狀態已更新（電源：{'開啟' if updated['power'] else '待機'}，訊號源：{updated['input']}，音量：{updated['volume']}%）。"
+        )
+        return {
+            "device_id": "tv-1",
+            "status": updated,
+            "message": summary_msg,
+        }
+
+    def call(self, name: str, arguments: dict) -> dict[str, object]:
+        if not isinstance(arguments, dict):
+            raise ValueError("工具參數須為物件")
+        if name not in {"get_tv_context", "control_tv"}:
+            raise ValueError("TV Agent 工具不允許控制其他設備")
+        method = getattr(self, name)
+        inspect.signature(method).bind(**arguments)
+        return method(**arguments)
+
+
+TV_SYSTEM = """你是 TV Agent，專門負責控制客廳智慧電視 tv-1。使用繁體中文，每回合只回傳一個 JSON 物件。
+系統已將目前電視狀態放在使用者訊息的 tool_result 欄位，不需重複呼叫 get_tv_context。
+可根據使用者情境需求推理目標狀態：
+- 例如「打開電視」、「想看電影／節目」：power=true（若提到開始看／播放則 playback="playing"）。
+- 例如「太吵了」、「聲音小一點」：依目前狀態的 volume 往下降 15～20（最低 0）；「大聲一點」則往上升 15～20（最高 100）。
+- 例如「切到遊戲機／第二個 HDMI」：input="HDMI2"（支援 HDMI1、HDMI2、HDMI3、HDMI4）。
+- 例如「關閉電視」、「不看了」：power=false。
+
+工具呼叫格式：
+{"tool":"control_tv","arguments":{"device_id":"tv-1","power":true,"volume":30,"muted":false,"input":"HDMI2","playback":"playing"},"summary":"簡短摘要"}
+（不需要修改的欄位請設為 null 或省略）
+若僅查詢電視狀態，可直接回傳：{"finish":"目前電視狀態說明"}
+若指令完全無法理解或資訊不足，回傳：{"ask":"具體問題"}
+不得控制 tv-1 以外的任何設備，不得回傳 Markdown 或 JSON 以外的文字。"""
+
+
+async def tv_session(repo, event, budget, parent_id, root_id, progress=None):
+    """Run TV Agent using the configured LLM provider with deterministic fallback when no model is configured."""
+    from smart_home_energy.agent import ProviderUnavailable, ProviderConfigurationError
+    from smart_home_energy.domain import encode
+    from smart_home_energy.repository import AgentRun
+
+    started = budget.monotonic()
+    before = budget.count
+    run_id = uuid4().hex
+    original_text = event.payload.get("text", "")
+    tools = TVTools(repo, root_id, original_text)
+    status = "failed"
+    message = "電視指令未完成"
+    provider_name = "none"
+
+    if progress:
+        progress("TV Agent 正在分析電視控制需求")
+
+    try:
+        context = tools.get_tv_context()
+        if not budget.providers:
+            # Offline / model-free unit test fallback
+            outcome = execute_command(original_text)
+            provider_name = "deterministic-tv-agent"
+            status = "completed"
+            message = str(outcome["message"])
+            repo.log_tool(
+                run_id,
+                {
+                    "role": "TV Agent",
+                    "provider": provider_name,
+                    "device_id": "tv-1",
+                    "action": {"tool": "control_tv", "arguments": {"command": original_text}, "summary": "無模型環境確定性電視控制"},
+                    "result": outcome["status"],
+                },
+            )
+        else:
+            messages = [
+                {"role": "system", "content": TV_SYSTEM},
+                {"role": "user", "content": json.dumps({"text": original_text, "tool_result": context}, ensure_ascii=False)},
+            ]
+            while True:
+                reply = await budget.complete(messages, repo, run_id)
+                provider_name = budget.providers[budget.index].name if budget.providers else "none"
+                try:
+                    if len(reply) > 65536:
+                        raise ValueError("模型回覆過大")
+                    action = json.loads(reply)
+                    if not isinstance(action, dict):
+                        raise ValueError("回覆須為 JSON 物件")
+                    if set(action) in ({"ask"}, {"finish"}):
+                        text_out = action.get("ask", action.get("finish"))
+                        if not isinstance(text_out, str) or not text_out.strip():
+                            raise ValueError("結果不可為空白")
+                        status = "needs_details" if "ask" in action else "completed"
+                        message = text_out
+                        break
+                    if set(action) != {"tool", "arguments", "summary"} or not isinstance(action["summary"], str):
+                        raise ValueError("工具動作格式不符")
+                    result = tools.call(action["tool"], action["arguments"])
+                    repo.log_tool(
+                        run_id,
+                        {
+                            "role": "TV Agent",
+                            "provider": provider_name,
+                            "device_id": "tv-1",
+                            "action": action,
+                            "result": result,
+                        },
+                    )
+                    messages.extend(
+                        [
+                            {"role": "assistant", "content": reply},
+                            {"role": "user", "content": json.dumps({"tool_result": result}, ensure_ascii=False)},
+                        ]
+                    )
+                    if action["tool"] == "control_tv":
+                        status = "completed"
+                        message = str(result["message"])
+                        break
+                except (ValueError, TypeError, KeyError, OverflowError, RecursionError) as error:
+                    repo.log_tool(run_id, {"role": "TV Agent", "device_id": "tv-1", "error": str(error)})
+                    messages.append({"role": "user", "content": json.dumps({"error": str(error)}, ensure_ascii=False)})
+    except (ProviderUnavailable, ProviderConfigurationError) as error:
+        try:
+            outcome = execute_command(original_text)
+            provider_name = "deterministic-tv-fallback"
+            status = "completed"
+            message = str(outcome["message"])
+        except ValueError:
+            message = str(error)
+    except (ValueError, TypeError, KeyError, OverflowError) as error:
+        message = str(error)
+        status = "needs_details"
+
+    run = AgentRun(
+        run_id,
+        event.event_id,
+        status,
+        provider_name,
+        budget.count - before,
+        budget.monotonic() - started,
+        message,
+        parent_id,
+        "tv-1",
+        "TV Agent",
+    )
+    repo.record_run(run)
+    return encode(run)
 
 
 router = APIRouter(prefix="/api/tv", tags=["tv"])

@@ -24,12 +24,14 @@ interface TVControlProps {
   power: boolean;
   onPowerChange: (power: boolean) => void;
   tvState?: TVState | null;
+  onRefresh?: () => void;
 }
 
 export default function TVControl({
   power,
   onPowerChange,
   tvState,
+  onRefresh,
 }: TVControlProps) {
   const [volume, setVolume] = useState(25);
   const [muted, setMuted] = useState(false);
@@ -52,7 +54,9 @@ export default function TVControl({
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
-    }).catch(() => {});
+    })
+      .then(() => onRefresh?.())
+      .catch(() => {});
   };
 
   useEffect(() => {

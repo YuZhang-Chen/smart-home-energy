@@ -17,6 +17,8 @@ from smart_home_energy.repository import AgentRun
 from smart_home_energy.tariffs import selected_tariff
 from smart_home_energy.agent_roles import agent_roles
 from smart_home_energy.light_agent import light_session, is_explicit_light_only_request
+from smart_home_energy.tv import tv_session, get_status as get_tv_status
+from smart_home_energy.curtain import curtain_session, get_status as get_curtain_status
 
 
 class SharedBudget:
@@ -622,147 +624,163 @@ async def run_household(repo, event, hems, providers=None, monotonic=time.monoto
             result = run_explicit_ac_request(repo, event, hems, run_id, root_id, ac_target, monotonic, report)
             results.append(result)
             status, message = result["status"], result["message"]
-        elif is_explicit_tv_only_request(event.payload.get("text", "")):
-            result = run_tv_agent(repo, event, run_id, root_id, event.payload.get("text", ""), monotonic, report)
-            results.append(result)
-            status, message = result["status"], result["message"]
-        elif is_explicit_curtain_only_request(event.payload.get("text", "")):
-            result = run_curtain_agent(repo, event, run_id, root_id, event.payload.get("text", ""), monotonic, report)
-            results.append(result)
-            status, message = result["status"], result["message"]
         else:
             budget.providers = configured_providers() if providers is None else providers
-            system = """你是智慧家庭 Main Agent，使用繁體中文，每次只回一個 JSON 物件。
+            if not budget.providers and is_explicit_tv_only_request(event.payload.get("text", "")):
+                result = await tv_session(repo, event, budget, run_id, root_id, report)
+                results.append(result)
+                status, message = result["status"], result["message"]
+            elif not budget.providers and is_explicit_curtain_only_request(event.payload.get("text", "")):
+                result = await curtain_session(repo, event, budget, run_id, root_id, report)
+                results.append(result)
+                status, message = result["status"], result["message"]
+            else:
+                system = """你是智慧家庭 Main Agent，使用繁體中文，每次只回一個 JSON 物件。
 工具 {"tool":"get_home_state","arguments":{},"summary":"摘要"}。
 可用 get_agent_roles={} 查詢角色權責。
 批次委派 {"tool":"delegate_tasks","arguments":{"requests":[{"device_id":"washer-1、ac-1、bulb-1、tv-1 或 curtain-1","text":"完整原始需求中與該設備相關的條件","task_id":"僅修改冷氣或洗衣現有任務時填入","expected_version":1}]},"summary":"摘要"}。
-同一需求可委派多台設備，各自失敗；冷氣與洗衣各自核准，明確照明需求由 Light Agent 直接排入控制佇列並等待回報，電視（tv-1）與窗簾（curtain-1）由 TV Agent 與 Curtain Agent 直接執行。使用者已同意預設：開冷氣27°C、一小時、確認後開始；洗衣24小時內完成、避開23:00–07:00並選較便宜時段。不因未填時間而補問，將完整需求交給子 Agent 套用偏好。
+同一需求可委派一至五台不同設備，各自失敗；冷氣（ac-1）與洗衣（washer-1）由子 Agent 提出計畫並各自等待核准；照明（bulb-1）由 Light Agent 排入控制佇列並等待回報；電視（tv-1，含開關機、音量、靜音、HDMI1~4、播放/暫停/看電影情境）委派給 TV Agent 執行；窗簾（curtain-1，含開合百分比、遮光/透光/太陽刺眼情境、停止與每日定時排程）委派給 Curtain Agent 執行。
+使用者已同意預設：開冷氣27°C、一小時、確認後開始；洗衣24小時內完成、避開23:00–07:00並選較便宜時段。不因未填時間而補問，將完整需求交給子 Agent 套用偏好。
 這些數字是初始偏好，以 get_home_state 的 preferences 為準。委派 text 保留使用者原文及明確條件，不把未說出的初始數字當成使用者指定值。
 若設備已有待補充、待核准或未啟動任務，修改同設備必須傳 task_id 與 expected_version，不新增第二個任務；未提及的設備保持原樣。缺正式費率基準等必要資訊才補問，向使用者說明需要哪個月份、多少度，不要求填JSON。
-task_id 只能取自 get_home_state.tasks 的未完成任務；設備回報可能仍帶有上次已結束的行程，不能當成目前任務。tasks 沒有該設備時，委派請省略 task_id 和 expected_version。
-先 get_home_state 再 delegate_tasks。每個設備最多一個子工作；Main Agent 不直接核准、不執行設備、不自行計算費用。
+task_id 只能取自 get_home_state.tasks 的未完成任務；設備回報可能仍帶有上次已結束的行程，不能當成目前任務。tasks 沒有該設備時（以及 bulb-1、tv-1、curtain-1），委派請省略 task_id 和 expected_version。
+先 get_home_state 再 delegate_tasks。每個設備最多一個子工作；Main Agent 不直接核准、不直接控制設備、不自行計算費用。
 僅查詢可 {"finish":"結果"}；資訊不足可 {"ask":"問題"}。"""
-            messages = [{"role": "system", "content": system}, {"role": "user", "content": event.payload["text"]}]
-            while True:
-                report("Main Agent 正在理解需求與檢查設備狀態")
-                reply = await budget.complete(messages, repo, run_id)
-                reply_provider = budget.providers[budget.index].name
-                try:
-                    if len(reply) > 65536:
-                        raise ValueError("模型回覆過大")
-                    action = json.loads(reply)
-                    if not isinstance(action, dict):
-                        raise ValueError("回覆須為 JSON 物件")
-                    if set(action) in ({"ask"}, {"finish"}):
-                        message = action.get("ask", action.get("finish"))
-                        if not isinstance(message, str) or not message.strip():
-                            raise ValueError("結果不可為空白")
-                        status = "needs_details" if "ask" in action else "completed"
-                        break
-                    if set(action) != {"tool", "arguments", "summary"} or not isinstance(action["arguments"], dict):
-                        raise ValueError("工具動作格式不符")
-                    report("Agent 正在執行「" + action["tool"] + "」")
-                    if action["tool"] == "get_home_state" and action["arguments"] == {}:
-                        active = repo.active_tasks()
-                        devices = {device: repo.device(device) for device in ("washer-1", "ac-1", "bulb-1")}
-                        for device, state in devices.items():
-                            if state and not any(task.device_id == device for task in active):
-                                devices[device] = {**state, "task_id": None, "run_id": None, "plan_version": 0}
-                        result = {"tasks": encode(active), "clock": encode(repo.clock()), "logical_now": encode(repo.clock().now()),
-                                  "devices": devices, "timezone": "Asia/Taipei",
-                                  "preferences": preferences(repo)}
-                    elif action["tool"] == "get_agent_roles" and action["arguments"] == {}:
-                        result = agent_roles()
-                    elif action["tool"] == "delegate_tasks" and set(action["arguments"]) == {"requests"}:
-                        requests = action["arguments"]["requests"]
-                        if not isinstance(requests, list) or not 1 <= len(requests) <= 5 or len({r["device_id"] for r in requests}) != len(requests):
-                            raise ValueError("一次委派一至五台不同設備")
-                        for item in requests:
-                            if item.get("device_id") not in {"bulb-1", "tv-1", "curtain-1"} and item.get("task_id") and repo.task(item["task_id"]).status in {"completed", "cancelled", "aborted", "resolved"}:
-                                raise ValueError("指定的是已結束任務，請重新讀取 get_home_state；沒有未完成任務的設備須省略 task_id 以建立新計畫")
-                        for request in requests:
-                            device = request["device_id"]
-                            if device not in {"washer-1", "ac-1", "bulb-1", "tv-1", "curtain-1"} or not isinstance(request.get("text"), str):
-                                raise ValueError("設備或需求不合法")
-                            identifier = sha256(f"{root_id}:{device}".encode()).hexdigest()
-                            try:
-                                if device == "tv-1":
-                                    result = run_tv_agent(repo, event, run_id, root_id, request["text"], monotonic, report)
-                                    results.append(result)
-                                    continue
-                                if device == "curtain-1":
-                                    result = run_curtain_agent(repo, event, run_id, root_id, request["text"], monotonic, report)
-                                    results.append(result)
-                                    continue
-                                if device == "bulb-1":
-                                    # A bulb action is immediate and has no scheduler task.
-                                    # Models sometimes copy task_id/expected_version from the
-                                    # shared home-state response; discard those fields at this
-                                    # boundary instead of turning an otherwise valid light
-                                    # request into a user-visible delegation error.
-                                    request = {key: value for key, value in request.items()
-                                               if key not in {"task_id", "expected_version"}}
+                messages = [{"role": "system", "content": system}, {"role": "user", "content": event.payload["text"]}]
+                while True:
+                    report("Main Agent 正在理解需求與檢查設備狀態")
+                    reply = await budget.complete(messages, repo, run_id)
+                    reply_provider = budget.providers[budget.index].name
+                    try:
+                        if len(reply) > 65536:
+                            raise ValueError("模型回覆過大")
+                        action = json.loads(reply)
+                        if not isinstance(action, dict):
+                            raise ValueError("回覆須為 JSON 物件")
+                        if set(action) in ({"ask"}, {"finish"}):
+                            message = action.get("ask", action.get("finish"))
+                            if not isinstance(message, str) or not message.strip():
+                                raise ValueError("結果不可為空白")
+                            status = "needs_details" if "ask" in action else "completed"
+                            break
+                        if set(action) != {"tool", "arguments", "summary"} or not isinstance(action["arguments"], dict):
+                            raise ValueError("工具動作格式不符")
+                        report("Agent 正在執行「" + action["tool"] + "」")
+                        if action["tool"] == "get_home_state" and action["arguments"] == {}:
+                            active = repo.active_tasks()
+                            devices = {device: repo.device(device) for device in ("washer-1", "ac-1", "bulb-1")}
+                            for device, state in devices.items():
+                                if state and not any(task.device_id == device for task in active):
+                                    devices[device] = {**state, "task_id": None, "run_id": None, "plan_version": 0}
+                            devices["tv-1"] = get_tv_status()
+                            devices["curtain-1"] = get_curtain_status()
+                            result = {"tasks": encode(active), "clock": encode(repo.clock()), "logical_now": encode(repo.clock().now()),
+                                      "devices": devices, "timezone": "Asia/Taipei",
+                                      "preferences": preferences(repo)}
+                        elif action["tool"] == "get_agent_roles" and action["arguments"] == {}:
+                            result = agent_roles()
+                        elif action["tool"] == "delegate_tasks" and set(action["arguments"]) == {"requests"}:
+                            requests = action["arguments"]["requests"]
+                            if not isinstance(requests, list) or not 1 <= len(requests) <= 5 or len({r["device_id"] for r in requests}) != len(requests):
+                                raise ValueError("一次委派一至五台不同設備")
+                            for item in requests:
+                                if item.get("device_id") not in {"bulb-1", "tv-1", "curtain-1"} and item.get("task_id") and repo.task(item["task_id"]).status in {"completed", "cancelled", "aborted", "resolved"}:
+                                    raise ValueError("指定的是已結束任務，請重新讀取 get_home_state；沒有未完成任務的設備須省略 task_id 以建立新計畫")
+                            for request in requests:
+                                device = request["device_id"]
+                                if device not in {"washer-1", "ac-1", "bulb-1", "tv-1", "curtain-1"} or not isinstance(request.get("text"), str):
+                                    raise ValueError("設備或需求不合法")
+                                identifier = sha256(f"{root_id}:{device}".encode()).hexdigest()
+                                try:
+                                    if device in {"tv-1", "curtain-1"}:
+                                        request = {key: value for key, value in request.items()
+                                                   if key not in {"task_id", "expected_version"}}
+                                        with repo.transaction() as db:
+                                            old = db.execute("SELECT data FROM delegations WHERE id=?", (identifier,)).fetchone()
+                                            previous = json.loads(old[0]) if old else None
+                                            if previous and previous.get("result"):
+                                                results.append(previous["result"])
+                                                continue
+                                            db.execute("INSERT OR IGNORE INTO delegations VALUES (?,?,?,?,?)",
+                                                       (identifier, root_id, device, None, json.dumps({"request_id": identifier})))
+                                        child_event = replace(event, task_id=None,
+                                                              payload={"text": request["text"], "root_id": root_id})
+                                        session_fn = tv_session if device == "tv-1" else curtain_session
+                                        result = await session_fn(repo, child_event, budget, run_id, root_id, report)
+                                        results.append(result)
+                                        with repo.transaction() as db:
+                                            db.execute("UPDATE delegations SET data=? WHERE id=?",
+                                                       (json.dumps({"request_id": identifier, "result": result}), identifier))
+                                        continue
+                                    if device == "bulb-1":
+                                        # A bulb action is immediate and has no scheduler task.
+                                        # Models sometimes copy task_id/expected_version from the
+                                        # shared home-state response; discard those fields at this
+                                        # boundary instead of turning an otherwise valid light
+                                        # request into a user-visible delegation error.
+                                        request = {key: value for key, value in request.items()
+                                                   if key not in {"task_id", "expected_version"}}
+                                        with repo.transaction() as db:
+                                            old = db.execute("SELECT data FROM delegations WHERE id=?", (identifier,)).fetchone()
+                                            previous = json.loads(old[0]) if old else None
+                                            if previous and previous.get("result"):
+                                                results.append(previous["result"])
+                                                continue
+                                            db.execute("INSERT OR IGNORE INTO delegations VALUES (?,?,?,?,?)",
+                                                       (identifier, root_id, device, None, json.dumps({"request_id": identifier})))
+                                        child_event = replace(event, task_id=None,
+                                                              payload={"text": event.payload["text"], "root_id": root_id})
+                                        result = await light_session(repo, child_event, budget, run_id, root_id)
+                                        results.append(result)
+                                        with repo.transaction() as db:
+                                            db.execute("UPDATE delegations SET data=? WHERE id=?",
+                                                       (json.dumps({"request_id": identifier, "result": result}), identifier))
+                                        continue
                                     with repo.transaction() as db:
                                         old = db.execute("SELECT data FROM delegations WHERE id=?", (identifier,)).fetchone()
                                         previous = json.loads(old[0]) if old else None
                                         if previous and previous.get("result"):
-                                            results.append(previous["result"])
+                                            current = repo.task(previous["task_id"])
+                                            results.append(previous["result"] if current.version == previous["version"] else {"device_id": device, "status": "failed", "message": "委派結果已過期，保留使用者更新後的任務"})
                                             continue
-                                        db.execute("INSERT OR IGNORE INTO delegations VALUES (?,?,?,?,?)",
-                                                   (identifier, root_id, device, None, json.dumps({"request_id": identifier})))
-                                    child_event = replace(event, task_id=None,
-                                                          payload={"text": event.payload["text"], "root_id": root_id})
-                                    result = await light_session(repo, child_event, budget, run_id, root_id)
+                                        if previous:
+                                            task = repo.task(previous["task_id"])
+                                            if task.version != previous["version"]:
+                                                raise ValueError("委派任務版本已改變，舊委派停止")
+                                        elif request.get("task_id"):
+                                            task = repo.task(request["task_id"])
+                                            if task.device_id != device or type(request.get("expected_version")) is not int or task.version != request.get("expected_version") or task.status not in {"needs_details", "pending", "scheduled", "running", "unknown", "failed"}:
+                                                raise ValueError("委派設備或任務版本不符")
+                                        else:
+                                            tariff = selected_tariff(repo, hems.tariff())
+                                            task = repo.create_task(None, hems.program(), tariff, request["text"]) if device == "washer-1" else repo.create_ac_task(None, tariff, request["text"])
+                                        if task.status in {"needs_details", "pending"} and not task.approval and not task.ac_approval:
+                                            current_tariff = selected_tariff(repo, hems.tariff(), task.task_id)
+                                            if current_tariff != task.tariff:
+                                                task = repo.update_task(task.task_id, task.version, tariff=current_tariff, plan=None, ac_plan=None)
+                                        db.execute("INSERT OR IGNORE INTO delegations VALUES (?,?,?,?,?)", (identifier, root_id, device, task.task_id,
+                                            json.dumps({"task_id": task.task_id, "version": task.version})))
+                                    child_event = replace(event, task_id=task.task_id, payload={"text": request["text"], "root_id": root_id})
+                                    result = await device_session(repo, child_event, task, budget, run_id)
                                     results.append(result)
+                                    report(("冷氣" if device == "ac-1" else "洗衣機") + "：" + result.get("message", "設備計畫已更新"))
                                     with repo.transaction() as db:
-                                        db.execute("UPDATE delegations SET data=? WHERE id=?",
-                                                   (json.dumps({"request_id": identifier, "result": result}), identifier))
-                                    continue
-                                with repo.transaction() as db:
-                                    old = db.execute("SELECT data FROM delegations WHERE id=?", (identifier,)).fetchone()
-                                    previous = json.loads(old[0]) if old else None
-                                    if previous and previous.get("result"):
-                                        current = repo.task(previous["task_id"])
-                                        results.append(previous["result"] if current.version == previous["version"] else {"device_id": device, "status": "failed", "message": "委派結果已過期，保留使用者更新後的任務"})
-                                        continue
-                                    if previous:
-                                        task = repo.task(previous["task_id"])
-                                        if task.version != previous["version"]:
-                                            raise ValueError("委派任務版本已改變，舊委派停止")
-                                    elif request.get("task_id"):
-                                        task = repo.task(request["task_id"])
-                                        if task.device_id != device or type(request.get("expected_version")) is not int or task.version != request.get("expected_version") or task.status not in {"needs_details", "pending", "scheduled", "running", "unknown", "failed"}:
-                                            raise ValueError("委派設備或任務版本不符")
-                                    else:
-                                        tariff = selected_tariff(repo, hems.tariff())
-                                        task = repo.create_task(None, hems.program(), tariff, request["text"]) if device == "washer-1" else repo.create_ac_task(None, tariff, request["text"])
-                                    if task.status in {"needs_details", "pending"} and not task.approval and not task.ac_approval:
-                                        current_tariff = selected_tariff(repo, hems.tariff(), task.task_id)
-                                        if current_tariff != task.tariff:
-                                            task = repo.update_task(task.task_id, task.version, tariff=current_tariff, plan=None, ac_plan=None)
-                                    db.execute("INSERT OR IGNORE INTO delegations VALUES (?,?,?,?,?)", (identifier, root_id, device, task.task_id,
-                                        json.dumps({"task_id": task.task_id, "version": task.version})))
-                                child_event = replace(event, task_id=task.task_id, payload={"text": request["text"], "root_id": root_id})
-                                result = await device_session(repo, child_event, task, budget, run_id)
-                                results.append(result)
-                                report(("冷氣" if device == "ac-1" else "洗衣機") + "：" + result.get("message", "設備計畫已更新"))
-                                with repo.transaction() as db:
-                                    db.execute("UPDATE delegations SET data=? WHERE id=?", (json.dumps({"task_id": task.task_id, "version": repo.task(task.task_id).version, "result": result}), identifier))
-                            except (ValueError, ProviderUnavailable) as error:
-                                results.append({"device_id": device, "status": "failed", "message": str(error)})
-                        result = results
-                        good = sum(r["status"] == "completed" for r in results)
-                        status = "completed" if good == len(results) else "partial_success" if good else "needs_details" if any(r["status"] == "needs_details" for r in results) else "failed"
-                        message = "；".join(r["device_id"] + "：" + r["message"] for r in results)
+                                        db.execute("UPDATE delegations SET data=? WHERE id=?", (json.dumps({"task_id": task.task_id, "version": repo.task(task.task_id).version, "result": result}), identifier))
+                                except (ValueError, ProviderUnavailable) as error:
+                                    results.append({"device_id": device, "status": "failed", "message": str(error)})
+                            result = results
+                            good = sum(r["status"] == "completed" for r in results)
+                            status = "completed" if good == len(results) else "partial_success" if good else "needs_details" if any(r["status"] == "needs_details" for r in results) else "failed"
+                            message = "；".join(r["device_id"] + "：" + r["message"] for r in results)
+                            repo.log_tool(run_id, {"provider": reply_provider, "action": action, "result": result})
+                            break  # Deterministic summary needs no extra model request.
+                        else:
+                            raise ValueError("Main Agent 只能查詢與委派")
                         repo.log_tool(run_id, {"provider": reply_provider, "action": action, "result": result})
-                        break  # Deterministic summary needs no extra model request.
-                    else:
-                        raise ValueError("Main Agent 只能查詢與委派")
-                    repo.log_tool(run_id, {"provider": reply_provider, "action": action, "result": result})
-                    messages.extend([{"role": "assistant", "content": reply}, {"role": "user", "content": json.dumps({"tool_result": result}, ensure_ascii=False)}])
-                except (ValueError, TypeError, KeyError, OverflowError, RecursionError) as error:
-                    repo.log_tool(run_id, {"error": str(error)})
-                    messages.append({"role": "user", "content": json.dumps({"error": str(error)}, ensure_ascii=False)})
+                        messages.extend([{"role": "assistant", "content": reply}, {"role": "user", "content": json.dumps({"tool_result": result}, ensure_ascii=False)}])
+                    except (ValueError, TypeError, KeyError, OverflowError, RecursionError) as error:
+                        repo.log_tool(run_id, {"error": str(error)})
+                        messages.append({"role": "user", "content": json.dumps({"error": str(error)}, ensure_ascii=False)})
     except (ProviderUnavailable, ProviderConfigurationError) as error:
         message = str(error)
     finally:

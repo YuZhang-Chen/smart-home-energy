@@ -2,6 +2,27 @@
 
 記錄各版本的重要變更，最新版本放最上方。格式參考 [Sample CHANGELOG](https://gist.github.com/juampynr/4c18214a8eb554084e21d6e288a18a2c)，使用版本號、日期及 Added／Changed／Fixed 分類；版本 commit 以對應的 `v{版本號}:` 開頭。既有未編版紀錄保留原標題。
 
+## [1.6.1] - 2026-11-24
+
+將 `TV Agent` 與 `Curtain Agent` 升級為由 `Main Agent` 階層委派、真正串接 AI Model（vLLM／Azure OpenAI）的 Tool-Calling 情境感知子代理，並補齊 3D 客廳電視模型與設備清單的即時視覺回饋。對應 commit：`v1.6.1: upgrade TV and Curtain agents to hierarchical LLM tool-calling and add 3D TV visual feedback`。
+
+### Added
+
+- 實作 `TVTools`／`tv_session`（`tv.py`）與 `CurtainTools`／`curtain_session`（`curtain.py`）LLM Tool-Calling 子代理：與既有代理共用 `SharedBudget`，支援自然情境與相對狀態推理（如陽光刺眼遮光、微開透光、相對音量調整、切換 HDMI 與自動開機），並具備嚴格的單一設備權限邊界與無模型確定性備援。
+- 3D 客廳電視模型（`Scene.tsx`）新增動態自發光螢幕、隨 `HDMI1`–`HDMI4` 切換的主題色與環境點光源、動態音量進度條及關機待機紅色指示燈；下方客廳設備清單（`App.tsx`）即時顯示電視運作／待機、HDMI 訊號源、音量與播放狀態。
+- 新增階層式 Multi-Agent 情境委派（`Main Agent` ➔ `Curtain Agent` + `TV Agent`）與跨設備越權攔截自動化測試（`test_api.py`）。
+
+### Changed
+
+- `Main Agent` 的 `get_home_state` 擴充包含 `tv-1` 與 `curtain-1` 即時狀態，並在設定有 AI Model 時統一透過 `delegate_tasks` 階層委派給 `tv_session` 與 `curtain_session`，在 `agent_runs` 診斷紀錄中建立完整的父子工作關聯。
+- 左側電視抽屜面板（`TVControl.tsx`）操作後立即觸發 `onRefresh`，加速 `/api/home` 與 3D 場景同步。
+
+### Validation
+
+- Python `test_api.py`、`test_light_agent.py` 與 `test_agent.py` 共 23 項測試通過。
+- 前端 Vitest 23 項互動測試與 Vite 正式建置通過。
+
+
 ## [1.6.0] - 2026-11-24
 
 將虛擬窗簾與智慧電視統一掛載至 FastAPI 8502 單一服務入口、併入 `/api/home` 家庭狀態樹，並擴充 Multi-Agent 家庭助理對話視窗支援電視與窗簾控制。對應 commit：`v1.6.0: unify TV and curtain into 8502 API, /api/home snapshot, and household assistant`。

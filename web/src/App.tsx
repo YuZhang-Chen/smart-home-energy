@@ -182,6 +182,14 @@ export default function App() {
 
       return `半開 ${Math.round(position)}%`;
     }
+    if (item.id === "tv-1") {
+      const tv = home?.devices["tv-1"]?.state;
+      if (!tv) return tvPower ? "運作中" : "待機中";
+      if (!tv.power) return "待機中";
+      const volText = tv.muted ? "靜音" : `${tv.volume}%`;
+      const playText = tv.playback === "playing" ? " · 播放中" : tv.playback === "paused" ? " · 已暫停" : "";
+      return `運作中 · ${tv.input} · ${volText}${playText}`;
+    }
     if (item.id !== "ac-1" && item.id !== "washer-1") return "資訊展示";
     const snapshot = home?.devices[item.id];
     if (!snapshot?.state) return "等待連線";
@@ -386,7 +394,7 @@ export default function App() {
             </div>
           </div>
         </div>
-        {drawerOpen && <div className="drawer-scrim" onMouseDown={(event) => { if (event.target === event.currentTarget) setDrawerOpen(false); }}><div ref={drawer} className="device-drawer" role="dialog" aria-modal="true" aria-label={`${device.name}設備控制`}><div className="drawer-heading"><b>{device.name}設備控制</b><button onClick={() => setDrawerOpen(false)} aria-label="關閉設備控制">×</button></div><DevicePanel key={selected} device={device} home={home} realNow={realNow} lightOn={lightOn} setLightOn={(on) => submit("set_bulb", { device_id: "bulb-1", power: on })} tvPower={tvPower} onTVPowerChange={setTvPower} submit={submit} busy={!!pending} connected={!!home && !error} /></div></div>}
+        {drawerOpen && <div className="drawer-scrim" onMouseDown={(event) => { if (event.target === event.currentTarget) setDrawerOpen(false); }}><div ref={drawer} className="device-drawer" role="dialog" aria-modal="true" aria-label={`${device.name}設備控制`}><div className="drawer-heading"><b>{device.name}設備控制</b><button onClick={() => setDrawerOpen(false)} aria-label="關閉設備控制">×</button></div><DevicePanel key={selected} device={device} home={home} realNow={realNow} lightOn={lightOn} setLightOn={(on) => submit("set_bulb", { device_id: "bulb-1", power: on })} tvPower={tvPower} onTVPowerChange={setTvPower} submit={submit} busy={!!pending} connected={!!home && !error} onRefresh={refresh} /></div></div>}
         </>}
       </main>
       <footer>
