@@ -154,8 +154,37 @@ def main() -> None:
 
     from smart_home_energy.api import create_app
 
+    fastapi_app = create_app()
+
+    # Register a hidden Gradio Blocks with a @spaces.GPU callback so Hugging Face
+    # ZeroGPU startup healthcheck detects the GPU function and keeps Uvicorn alive,
+    # while "/" and "/api/*" still serve our React 3D Living Room and FastAPI routes.
+    try:
+        import gradio as gr
+        import spaces
+
+        @spaces.GPU
+        def _zerogpu_ping(text: str = "ok") -> str:
+            return text
+
+        with gr.Blocks() as demo:
+            btn = gr.Button("ping")
+            out = gr.Textbox()
+            btn.click(fn=_zerogpu_ping, inputs=out, outputs=out)
+
+        demo.queue()
+        # Mount Gradio on a sub-path AND expose its config routes so ZeroGPU supervisor sees it
+        gr.mount_gradio_app(fastapi_app, demo, path="/_gradio_zerogpu")
+        for route in demo.app.routes:
+            route_path = getattr(route, "path", "")
+            if route_path in ("/config", "/info", "/gradio_api/info"):
+                fastapi_app.routes.insert(0, route)
+        print("[HF-Deploy] Mounted ZeroGPU-compatible Gradio healthcheck routes.", flush=True)
+    except Exception as exc:
+        print(f"[HF-Deploy] Gradio ZeroGPU mount skipped: {exc}", flush=True)
+
     print(f"[HF-Deploy] Launching FastAPI + 3D Living Room on http://{host}:{api_port} ...", flush=True)
-    uvicorn.run(create_app(), host=host, port=api_port)
+    uvicorn.run(fastapi_app, host=host, port=api_port)
 
 
 if __name__ == "__main__":
