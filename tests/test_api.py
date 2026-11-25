@@ -310,6 +310,125 @@ class ApiTests(unittest.TestCase):
         self.assertEqual({c['device_id'] for c in children}, {'curtain-1', 'tv-1'})
         self.assertTrue(all(c['provider'] == 'fake' and c['requests'] == 1 for c in children))
 
+        # Verify all MCP tool executions are tagged with protocol="MCP" in tool_logs
+        tool_logs = [json.loads(row['data']) for row in self.repo.records('tool_logs', 30)]
+        self.assertTrue(len(tool_logs) > 0)
+        self.assertTrue(all(entry.get('protocol') == 'MCP' for entry in tool_logs))
+
+    def test_mcp_jsonrpc_initialize_resources_and_diagnostics(self):
+        # 1. Diagnostics & manifest expose MCP server status and catalog
+        diag = self.client.get('/api/diagnostics').json()
+        self.assertEqual(diag['services']['mcp_server'], 'online (MCP SDK)')
+        self.assertIn('mcp_catalog', diag)
+        manifest = self.client.get('/api/mcp/manifest').json()
+        self.assertEqual(manifest['protocol'], 'MCP')
+        self.assertEqual(
+            set(manifest['tools_by_role'].keys()),
+            {'Main Agent', 'Washer Agent', 'AC Agent', 'Light Agent', 'TV Agent', 'Curtain Agent', 'Controller'},
+        )
+
+        # 2. JSON-RPC initialize & ping
+        init_res = self.client.post('/api/mcp', json={
+            'jsonrpc': '2.0',
+            'id': 1,
+            'method': 'initialize',
+            'params': {'protocolVersion': '2024-11-05'},
+        }).json()
+        self.assertEqual(init_res['result']['protocolVersion'], '2024-11-05')
+        self.assertEqual(init_res['result']['serverInfo']['name'], 'smart-home-mcp')
+        self.assertEqual(
+            self.client.post('/api/mcp', json={'jsonrpc': '2.0', 'id': 2, 'method': 'ping'}).json()['result'],
+            {},
+        )
+
+        # 3. resources/list & resources/read
+        res_list = self.client.post('/api/mcp', json={'jsonrpc': '2.0', 'id': 3, 'method': 'resources/list'}).json()
+        uris = {item['uri'] for item in res_list['result']['resources']}
+        self.assertTrue({'home://state', 'home://roles', 'home://tariffs/taipower', 'device://tv-1/context'} <= uris)
+
+        home_state_res = self.client.post('/api/mcp', json={
+            'jsonrpc': '2.0',
+            'id': 4,
+            'method': 'resources/read',
+            'params': {'uri': 'home://state'},
+        }).json()
+        home_data = json.loads(home_state_res['result']['contents'][0]['text'])
+        self.assertEqual(set(home_data['devices'].keys()), {'washer-1', 'ac-1', 'bulb-1', 'tv-1', 'curtain-1'})
+
+        tv_ctx_res = self.client.post('/api/mcp', json={
+            'jsonrpc': '2.0',
+            'id': 5,
+            'method': 'resources/read',
+            'params': {'uri': 'device://tv-1/context'},
+        }, headers={'X-Agent-Role': 'TV Agent'}).json()
+        tv_ctx = json.loads(tv_ctx_res['result']['contents'][0]['text'])
+        self.assertEqual(tv_ctx['device_id'], 'tv-1')
+
+        # Cross-device resource read must be blocked for TV Agent
+        denied_res = self.client.post('/api/mcp', json={
+            'jsonrpc': '2.0',
+            'id': 6,
+            'method': 'resources/read',
+            'params': {'uri': 'device://ac-1/context'},
+        }, headers={'X-Agent-Role': 'TV Agent'}).json()
+        self.assertEqual(denied_res['error']['code'], -32003)
+
+    def test_mcp_role_scoped_tools_list_and_call_enforcement(self):
+        # 1. Role-Scoped tools/list checks
+        light_tools = self.client.post('/api/mcp', json={
+            'jsonrpc': '2.0', 'id': 1, 'method': 'tools/list', 'params': {'role': 'Light Agent'},
+        }).json()['result']['tools']
+        self.assertEqual({t['name'] for t in light_tools}, {'get_light_context', 'submit_light_action'})
+
+        tv_tools = self.client.post('/api/mcp', json={
+            'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list',
+        }, headers={'X-Agent-Role': 'TV Agent'}).json()['result']['tools']
+        self.assertEqual({t['name'] for t in tv_tools}, {'get_tv_context', 'control_tv'})
+
+        main_tools = self.client.post('/api/mcp', json={
+            'jsonrpc': '2.0', 'id': 3, 'method': 'tools/list', 'params': {'role': 'Main Agent'},
+        }).json()['result']['tools']
+        main_names = {t['name'] for t in main_tools}
+        self.assertEqual(main_names, {'get_home_state', 'get_agent_roles', 'delegate_tasks'})
+        self.assertFalse(main_names & {'control_tv', 'set_curtain_position', 'submit_light_action', 'propose_plan'})
+
+        # 2. Cross-tool & cross-device calls must return isError=True
+        wrong_tool = self.client.post('/api/mcp', json={
+            'jsonrpc': '2.0',
+            'id': 4,
+            'method': 'tools/call',
+            'params': {'role': 'TV Agent', 'name': 'set_curtain_position', 'arguments': {'device_id': 'curtain-1', 'position': 50}},
+        }).json()
+        self.assertTrue(wrong_tool['result']['isError'])
+
+        wrong_device = self.client.post('/api/mcp', json={
+            'jsonrpc': '2.0',
+            'id': 5,
+            'method': 'tools/call',
+            'params': {'role': 'TV Agent', 'name': 'control_tv', 'arguments': {'device_id': 'ac-1', 'power': True}},
+        }).json()
+        self.assertTrue(wrong_device['result']['isError'])
+
+        main_control = self.client.post('/api/mcp', json={
+            'jsonrpc': '2.0',
+            'id': 6,
+            'method': 'tools/call',
+            'params': {'role': 'Main Agent', 'name': 'control_tv', 'arguments': {'device_id': 'tv-1', 'power': True}},
+        }).json()
+        self.assertTrue(main_control['result']['isError'])
+
+        # 3. Authorized tools/call succeeds and updates state
+        ok_tv = self.client.post('/api/mcp', json={
+            'jsonrpc': '2.0',
+            'id': 7,
+            'method': 'tools/call',
+            'params': {'role': 'TV Agent', 'name': 'control_tv', 'arguments': {'device_id': 'tv-1', 'power': True, 'volume': 22}},
+        }).json()
+        self.assertFalse(ok_tv['result']['isError'])
+        tv_payload = json.loads(ok_tv['result']['content'][0]['text'])
+        self.assertEqual(tv_payload['status']['volume'], 22)
+        self.assertTrue(tv_payload['status']['power'])
+
 
 if __name__ == '__main__':
     unittest.main()

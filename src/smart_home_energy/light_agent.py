@@ -15,6 +15,7 @@ from smart_home_energy.bulb_domain import (
     percent_to_level,
 )
 from smart_home_energy.domain import decode, utcnow
+from smart_home_energy.mcp_server import MCPToolExecutionError, SmartHomeMCPServer
 from smart_home_energy.repository import AgentRun
 
 
@@ -547,6 +548,7 @@ async def light_session(
         root_id,
         original_text,
     )
+    mcp = SmartHomeMCPServer(repo)
 
     status = "failed"
     message = "照明需求未處理"
@@ -554,7 +556,12 @@ async def light_session(
 
     try:
 
-        context = tools.get_light_context()
+        context = mcp.call_tool_value(
+            "Light Agent",
+            "get_light_context",
+            {},
+            tool_instance=tools,
+        )
 
         state = (
             decode(BulbState, context["state"])
@@ -608,23 +615,15 @@ async def light_session(
 
             else:
 
-                result = tools.call(
+                result = mcp.call_tool_value(
+                    "Light Agent",
                     "submit_light_action",
                     direct_target,
-                )
-
-                repo.log_tool(
-                    run_id,
-                    {
-                        "role": "Light Agent",
-                        "provider": "deterministic-explicit-light-parser",
-                        "action": {
-                            "tool": "submit_light_action",
-                            "arguments": direct_target,
-                            "summary": "依使用者明確指定的亮度及色溫執行控制",
-                        },
-                        "result": result,
-                    },
+                    tool_instance=tools,
+                    run_id=run_id,
+                    provider="deterministic-explicit-light-parser",
+                    device_id="bulb-1",
+                    summary="依使用者明確指定的亮度及色溫執行控制",
                 )
 
                 status = "completed"
@@ -710,19 +709,15 @@ async def light_session(
                     ):
                         raise ValueError("工具動作格式不符")
 
-                    result = tools.call(
+                    result = mcp.call_tool_value(
+                        "Light Agent",
                         action["tool"],
                         action["arguments"],
-                    )
-
-                    repo.log_tool(
-                        run_id,
-                        {
-                            "role": "Light Agent",
-                            "provider": provider_name,
-                            "action": action,
-                            "result": result,
-                        },
+                        tool_instance=tools,
+                        run_id=run_id,
+                        provider=provider_name,
+                        device_id="bulb-1",
+                        summary=action["summary"],
                     )
 
                     messages.extend(
@@ -754,13 +749,15 @@ async def light_session(
                     RecursionError,
                 ) as error:
 
-                    repo.log_tool(
-                        run_id,
-                        {
-                            "role": "Light Agent",
-                            "error": str(error),
-                        },
-                    )
+                    if not isinstance(error, MCPToolExecutionError):
+                        repo.log_tool(
+                            run_id,
+                            {
+                                "protocol": "MCP",
+                                "role": "Light Agent",
+                                "error": str(error),
+                            },
+                        )
 
                     messages.append(
                         {

@@ -16,11 +16,14 @@
 
 頂部導覽可切換用電紀錄、偏好設定與系統診斷。用電頁顯示最近功率樣本、家庭核准任務增量費用與近期任務；偏好頁可保存冷氣與洗衣預設、費率方案、逐月基準用電與展示時鐘倍率，並要求更新台電費率來源。缺少指定月份基準時，正式費率估算會依原規則要求補齊。
 
-診斷頁提供本機傳輸狀態、Agent／工具、設備命令、請求佇列與稽核紀錄。畫面透過 FastAPI 讀取資料；所有設備操作仍經既有持久化請求與 Controller 驗證。
+診斷頁提供本機傳輸狀態、MCP Server 狀態（`online (MCP SDK)`）、**MCP 協定目錄（Resources & Role-Scoped Tools）**、Agent／工具（標註 `"protocol": "MCP"`）、設備命令、請求佇列與稽核紀錄。畫面透過 FastAPI 讀取資料；所有設備操作仍經既有持久化請求與 Controller 驗證。
 
-## 啟動
+## 啟動與 `.env` 準備
+
+首次啟動請先由 `.env.example` 建立 `.env`（可選填 `VLLM_BASE_URL`／`VLLM_MODEL` 或 `AZURE_OPENAI_*`，留白則使用無模型確定性控制與手動表單）：
 
 ```powershell
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 .\.venv\Scripts\python.exe -m pip install -e ".[web]"
 npm.cmd ci --prefix web
 npm.cmd run build --prefix web

@@ -103,7 +103,7 @@ if (Test-Path -LiteralPath $pidFile) {
 
 # Validate Python dependencies and load only the non-secret MQTT/Matter settings
 # needed by this launcher. The .env file itself is never printed or copied.
-& $pythonExe -c 'import fastapi, uvicorn, httpx, ag_ui.core, paho.mqtt.client, openai, dotenv'
+& $pythonExe -c 'import fastapi, uvicorn, httpx, ag_ui.core, paho.mqtt.client, openai, dotenv, mcp'
 if ($LASTEXITCODE -ne 0) {
     throw 'Python 依賴不完整。請執行 .venv\Scripts\python.exe -m pip install -e ".[web]"。'
 }

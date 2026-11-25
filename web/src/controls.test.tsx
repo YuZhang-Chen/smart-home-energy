@@ -9,6 +9,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App, { LightActionCard, ProposalCard } from "./App";
+import { DiagnosticsView } from "./SystemViews";
 import { useCommands } from "./api";
 import DevicePanel, { PlanForm } from "./DevicePanel";
 import {
@@ -504,5 +505,41 @@ describe("durable request retries", () => {
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(result.current.pending).toBeNull();
     unmount();
+  });
+});
+
+describe("diagnostics MCP catalog", () => {
+  it("renders mcp_server status and role-scoped MCP catalog", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          services: { api: "online", mcp_server: "online (MCP SDK)" },
+          mcp_catalog: {
+            protocol: "MCP",
+            protocol_version: "2024-11-05",
+            server: { name: "smart-home-mcp", version: "1.0.0" },
+            resources: [
+              { uri: "home://state", name: "home_state", description: "全屋設備狀態" },
+            ],
+            tools_by_role: {
+              "TV Agent": [{ name: "control_tv", description: "控制客廳電視" }],
+            },
+          },
+          requests: [],
+          agent_runs: [],
+          tool_logs: [],
+          audit: [],
+          commands: [],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    const view = render(<DiagnosticsView />);
+    expect(await screen.findByText("online (MCP SDK)")).toBeInTheDocument();
+    expect(screen.getByText(/MCP 協定目錄/)).toBeInTheDocument();
+    expect(screen.getByText("home://state")).toBeInTheDocument();
+    expect(screen.getByText("control_tv")).toBeInTheDocument();
+    view.unmount();
+    fetchMock.mockRestore();
   });
 });

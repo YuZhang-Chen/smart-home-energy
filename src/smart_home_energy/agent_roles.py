@@ -15,10 +15,10 @@ def agent_roles():
     if source is None:
         raise ValueError("找不到 Agent 權責登錄")
     roles = json.loads(source.read_text(encoding="utf-8"))
-    required = {"Main Agent", "Washer Agent", "AC Agent", "Light Agent", "Controller"}
+    required = {"Main Agent", "Washer Agent", "AC Agent", "Light Agent", "TV Agent", "Curtain Agent", "Controller"}
     if set(roles) != required:
         raise ValueError("Agent 權責登錄缺少必要角色")
-    known = {"washer-1", "ac-1", "bulb-1"}
+    known = {"washer-1", "ac-1", "bulb-1", "tv-1", "curtain-1"}
     for name, policy in roles.items():
         if set(policy) != {"devices", "can", "cannot"} or any(not isinstance(policy[key], list) for key in policy):
             raise ValueError(f"{name} 權責格式不合法")

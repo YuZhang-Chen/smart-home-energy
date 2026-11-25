@@ -17,6 +17,7 @@ from smart_home_energy.repository import AgentRun
 from smart_home_energy.tariffs import selected_tariff
 from smart_home_energy.agent_roles import agent_roles
 from smart_home_energy.light_agent import light_session, is_explicit_light_only_request
+from smart_home_energy.mcp_server import MCPToolExecutionError, SmartHomeMCPServer
 from smart_home_energy.tv import tv_session, get_status as get_tv_status
 from smart_home_energy.curtain import curtain_session, get_status as get_curtain_status
 
@@ -157,6 +158,7 @@ async def device_session(repo, event, task, budget, parent_id):
 額外工具 find_default_schedule={immediate:boolean}：沒指定日期／期限時使用，預設24小時內完成、避開23:00–07:00、選便宜時段。明說現在／馬上洗時 immediate=true 選最早合法時段。
 它回傳 {constraints,plan}，將這兩個物件原樣交給 propose_plan；使用者明確指定的條件仍用 find_schedule，不得以預設覆蓋。成功提出計畫即結束子工作。""") if task.kind == "washer" else AC_SYSTEM
     tools = DeviceTools(repo, task.task_id)
+    mcp = SmartHomeMCPServer(repo)
     messages = [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(encode({"text": event.payload.get("text", ""), "task": task, "event": event.payload}), ensure_ascii=False)}]
     status, message = "failed", "子工作未完成，請使用表單"
     try:
@@ -176,14 +178,23 @@ async def device_session(repo, event, task, budget, parent_id):
                     break
                 if set(action) != {"tool", "arguments", "summary"} or not isinstance(action["summary"], str):
                     raise ValueError("工具動作格式不符")
-                result = tools.call(action["tool"], action["arguments"])
-                repo.log_tool(run_id, {"role": role, "provider": budget.providers[budget.index].name, "device_id": task.device_id, "action": action, "result": result})
+                result = mcp.call_tool_value(
+                    role,
+                    action["tool"],
+                    action["arguments"],
+                    tool_instance=tools,
+                    run_id=run_id,
+                    provider=budget.providers[budget.index].name,
+                    device_id=task.device_id,
+                    summary=action["summary"],
+                )
                 messages.extend([{"role": "assistant", "content": reply}, {"role": "user", "content": json.dumps({"tool_result": result}, ensure_ascii=False)}])
                 if action["tool"] in {"propose_plan", "reschedule_task"}:
                     status, message = "completed", "計畫已提出，等待使用者核准" if result["status"] == "pending" else "已在核准範圍內改排"
                     break
             except (ValueError, TypeError, KeyError, OverflowError, RecursionError) as error:
-                repo.log_tool(run_id, {"error": str(error)})
+                if not isinstance(error, MCPToolExecutionError):
+                    repo.log_tool(run_id, {"protocol": "MCP", "role": role, "device_id": task.device_id, "error": str(error)})
                 messages.append({"role": "user", "content": json.dumps({"error": str(error)}, ensure_ascii=False)})
     except (ProviderUnavailable, ProviderConfigurationError) as error:
         message = str(error)
@@ -323,48 +334,54 @@ def run_explicit_ac_request(repo, event, hems, parent_id, root_id, target, monot
             )
 
         tools = DeviceTools(repo, task.task_id)
-        context = tools.get_device_context()
-        repo.log_tool(run_id, {
-            "role": "AC Agent", "provider": provider, "device_id": "ac-1",
-            "action": {"tool": "get_device_context", "arguments": {}, "summary": "讀取客廳冷氣與最新室溫"},
-            "result": context,
-        })
+        mcp = SmartHomeMCPServer(repo, hems)
+        context = mcp.call_tool_value(
+            "AC Agent",
+            "get_device_context",
+            {},
+            tool_instance=tools,
+            run_id=run_id,
+            provider=provider,
+            device_id="ac-1",
+            summary="讀取客廳冷氣與最新室溫",
+        )
         if not context["fresh"]:
             raise ValueError("目前沒有收到新鮮的冷氣室溫回報；請確認 AC 模擬器與 MQTT 連線。尚未提出或啟動冷氣。")
 
-        plan = tools.prepare_default_plan(
-            duration_minutes=target.get("duration_minutes"),
-            target_c=target.get("target_c"),
+        plan = mcp.call_tool_value(
+            "AC Agent",
+            "prepare_default_plan",
+            {
+                "duration_minutes": target.get("duration_minutes"),
+                "target_c": target.get("target_c"),
+            },
+            tool_instance=tools,
+            run_id=run_id,
+            provider=provider,
+            device_id="ac-1",
+            summary="依使用者指定及已同意偏好建立冷氣計畫",
         )
-        repo.log_tool(run_id, {
-            "role": "AC Agent", "provider": provider, "device_id": "ac-1",
-            "action": {
-                "tool": "prepare_default_plan",
-                "arguments": {
-                    "duration_minutes": target.get("duration_minutes"),
-                    "target_c": target.get("target_c"),
-                },
-                "summary": "依使用者指定及已同意偏好建立冷氣計畫",
-            },
-            "result": plan,
-        })
 
-        validation = tools.validate_plan(plan)
-        repo.log_tool(run_id, {
-            "role": "AC Agent", "provider": provider, "device_id": "ac-1",
-            "action": {"tool": "validate_plan", "arguments": {"plan": plan}, "summary": "驗證冷氣溫度、時段與費用計算"},
-            "result": validation,
-        })
-        proposed = tools.propose_plan(plan, expected_version=task.version)
-        repo.log_tool(run_id, {
-            "role": "AC Agent", "provider": provider, "device_id": "ac-1",
-            "action": {
-                "tool": "propose_plan",
-                "arguments": {"plan": plan, "expected_version": task.version},
-                "summary": "提出待使用者核准的冷氣計畫",
-            },
-            "result": encode(proposed),
-        })
+        mcp.call_tool_value(
+            "AC Agent",
+            "validate_plan",
+            {"plan": plan},
+            tool_instance=tools,
+            run_id=run_id,
+            provider=provider,
+            device_id="ac-1",
+            summary="驗證冷氣溫度、時段與費用計算",
+        )
+        mcp.call_tool_value(
+            "AC Agent",
+            "propose_plan",
+            {"plan": plan, "expected_version": task.version},
+            tool_instance=tools,
+            run_id=run_id,
+            provider=provider,
+            device_id="ac-1",
+            summary="提出待使用者核准的冷氣計畫",
+        )
 
         actual_target = plan["constraints"]["target_c"]
         duration = (datetime.fromisoformat(plan["constraints"]["end"]) - datetime.fromisoformat(plan["constraints"]["start"])).total_seconds() / 60
@@ -381,7 +398,8 @@ def run_explicit_ac_request(repo, event, hems, parent_id, root_id, target, monot
     except (ValueError, TypeError, KeyError, OverflowError) as error:
         message = str(error)
         status = "needs_details" if any(word in message for word in ("新鮮", "請先", "已有核准", "目前任務狀態")) else "failed"
-        repo.log_tool(run_id, {"role": "AC Agent", "provider": provider, "device_id": "ac-1", "error": message})
+        if not isinstance(error, MCPToolExecutionError):
+            repo.log_tool(run_id, {"protocol": "MCP", "role": "AC Agent", "provider": provider, "device_id": "ac-1", "error": message})
 
     run = AgentRun(run_id, event.event_id, status, provider, 0, monotonic() - started, message, parent_id, "ac-1", "AC Agent")
     repo.record_run(run)
@@ -466,6 +484,7 @@ def run_explicit_ac_stop_request(repo, event, parent_id, root_id, monotonic=time
             raise ValueError(f"客廳冷氣目前任務狀態為 {task.status}，無法安全送出停止命令。")
 
         repo.log_tool(run_id, {
+            "protocol": "MCP", "mcp_method": "tools/call",
             "role": "AC Agent", "provider": provider, "device_id": "ac-1",
             "action": {"tool": "request_ac_stop", "arguments": {"task_id": task.task_id if task else None},
                        "summary": "核對同一運轉任務後，透過控制服務送出停止請求"},
@@ -514,6 +533,7 @@ def run_tv_agent(repo, event, parent_id, root_id, text: str, monotonic=time.mono
         status = "completed"
         message = str(outcome["message"])
         repo.log_tool(run_id, {
+            "protocol": "MCP", "mcp_method": "tools/call",
             "role": "TV Agent", "provider": provider, "device_id": "tv-1",
             "action": {"tool": "control_tv", "arguments": {"command": text}, "summary": "執行電視控制與狀態同步"},
             "result": outcome["status"],
@@ -558,6 +578,7 @@ def run_curtain_agent(repo, event, parent_id, root_id, text: str, monotonic=time
             label = "全開 (100%)" if target >= 99 else "全關 (0%)" if target <= 1 else f"開啟 {target}%"
             message = f"客廳窗簾已執行指令：移動至 {label}。"
         repo.log_tool(run_id, {
+            "protocol": "MCP", "mcp_method": "tools/call",
             "role": "Curtain Agent", "provider": provider, "device_id": "curtain-1",
             "action": {"tool": "control_curtain", "arguments": {"command": text}, "summary": "執行窗簾開合或排程控制"},
             "result": state,
@@ -646,6 +667,7 @@ async def run_household(repo, event, hems, providers=None, monotonic=time.monoto
 task_id 只能取自 get_home_state.tasks 的未完成任務；設備回報可能仍帶有上次已結束的行程，不能當成目前任務。tasks 沒有該設備時（以及 bulb-1、tv-1、curtain-1），委派請省略 task_id 和 expected_version。
 先 get_home_state 再 delegate_tasks。每個設備最多一個子工作；Main Agent 不直接核准、不直接控制設備、不自行計算費用。
 僅查詢可 {"finish":"結果"}；資訊不足可 {"ask":"問題"}。"""
+                mcp = SmartHomeMCPServer(repo, hems)
                 messages = [{"role": "system", "content": system}, {"role": "user", "content": event.payload["text"]}]
                 while True:
                     report("Main Agent 正在理解需求與檢查設備狀態")
@@ -666,19 +688,17 @@ task_id 只能取自 get_home_state.tasks 的未完成任務；設備回報可�
                         if set(action) != {"tool", "arguments", "summary"} or not isinstance(action["arguments"], dict):
                             raise ValueError("工具動作格式不符")
                         report("Agent 正在執行「" + action["tool"] + "」")
-                        if action["tool"] == "get_home_state" and action["arguments"] == {}:
-                            active = repo.active_tasks()
-                            devices = {device: repo.device(device) for device in ("washer-1", "ac-1", "bulb-1")}
-                            for device, state in devices.items():
-                                if state and not any(task.device_id == device for task in active):
-                                    devices[device] = {**state, "task_id": None, "run_id": None, "plan_version": 0}
-                            devices["tv-1"] = get_tv_status()
-                            devices["curtain-1"] = get_curtain_status()
-                            result = {"tasks": encode(active), "clock": encode(repo.clock()), "logical_now": encode(repo.clock().now()),
-                                      "devices": devices, "timezone": "Asia/Taipei",
-                                      "preferences": preferences(repo)}
-                        elif action["tool"] == "get_agent_roles" and action["arguments"] == {}:
-                            result = agent_roles()
+                        if action["tool"] in {"get_home_state", "get_agent_roles"}:
+                            result = mcp.call_tool_value(
+                                "Main Agent",
+                                action["tool"],
+                                action["arguments"],
+                                run_id=run_id,
+                                provider=reply_provider,
+                                summary=action["summary"],
+                            )
+                            messages.extend([{"role": "assistant", "content": reply}, {"role": "user", "content": json.dumps({"tool_result": result}, ensure_ascii=False)}])
+                            continue
                         elif action["tool"] == "delegate_tasks" and set(action["arguments"]) == {"requests"}:
                             requests = action["arguments"]["requests"]
                             if not isinstance(requests, list) or not 1 <= len(requests) <= 5 or len({r["device_id"] for r in requests}) != len(requests):
@@ -772,14 +792,20 @@ task_id 只能取自 get_home_state.tasks 的未完成任務；設備回報可�
                             good = sum(r["status"] == "completed" for r in results)
                             status = "completed" if good == len(results) else "partial_success" if good else "needs_details" if any(r["status"] == "needs_details" for r in results) else "failed"
                             message = "；".join(r["device_id"] + "：" + r["message"] for r in results)
-                            repo.log_tool(run_id, {"provider": reply_provider, "action": action, "result": result})
+                            repo.log_tool(run_id, {"protocol": "MCP", "mcp_method": "tools/call", "role": "Main Agent", "provider": reply_provider, "action": action, "result": result})
                             break  # Deterministic summary needs no extra model request.
                         else:
-                            raise ValueError("Main Agent 只能查詢與委派")
-                        repo.log_tool(run_id, {"provider": reply_provider, "action": action, "result": result})
-                        messages.extend([{"role": "assistant", "content": reply}, {"role": "user", "content": json.dumps({"tool_result": result}, ensure_ascii=False)}])
+                            mcp.call_tool_value(
+                                "Main Agent",
+                                action["tool"],
+                                action["arguments"],
+                                run_id=run_id,
+                                provider=reply_provider,
+                                summary=action["summary"],
+                            )
                     except (ValueError, TypeError, KeyError, OverflowError, RecursionError) as error:
-                        repo.log_tool(run_id, {"error": str(error)})
+                        if not isinstance(error, MCPToolExecutionError):
+                            repo.log_tool(run_id, {"protocol": "MCP", "role": "Main Agent", "error": str(error)})
                         messages.append({"role": "user", "content": json.dumps({"error": str(error)}, ensure_ascii=False)})
     except (ProviderUnavailable, ProviderConfigurationError) as error:
         message = str(error)

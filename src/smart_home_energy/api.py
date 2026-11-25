@@ -14,6 +14,7 @@ from smart_home_energy.ac_domain import ACConstraints
 from smart_home_energy.assistant_defaults import preferences
 from smart_home_energy.config import HemsSettings
 from smart_home_energy.domain import TaskConstraints, encode, utcnow
+from smart_home_energy.mcp_server import SmartHomeMCPServer, create_mcp_router
 from smart_home_energy.repository import Repository
 
 
@@ -186,6 +187,7 @@ def create_app(repo: Repository | None = None, hems: HemsSettings | None = None,
                static_directory: Path | None = None) -> FastAPI:
     hems = hems or HemsSettings.from_env()
     repo = repo or Repository(hems.database)
+    mcp_server = SmartHomeMCPServer(repo, hems)
     runtime_url = os.getenv("HEMS_COPILOT_RUNTIME_URL", "http://127.0.0.1:8503").rstrip("/")
     app = FastAPI(title="智慧客廳本機 API", docs_url="/api/docs", openapi_url="/api/openapi.json", redoc_url=None)
 
@@ -343,7 +345,9 @@ def create_app(repo: Repository | None = None, hems: HemsSettings | None = None,
             except (TypeError, ValueError):
                 controller_status = "unknown"
         return {"services": {"api": "online", "copilot_runtime": runtime_status,
-                "controller": controller_status, "transport": os.getenv("HEMS_TRANSPORT", "mqtt")},
+                "controller": controller_status, "mcp_server": "online (MCP SDK)",
+                "transport": os.getenv("HEMS_TRANSPORT", "mqtt")},
+                "mcp_catalog": mcp_server.catalog(),
                 "clock": encode(repo.clock()), "requests": repo.records("requests", 50), "agent_runs": repo.records("agent_runs", 50),
                 "tool_logs": repo.records("tool_logs", 50), "audit": repo.records("audit", 50), "commands": repo.records("commands", 50)}
 
@@ -388,6 +392,7 @@ def create_app(repo: Repository | None = None, hems: HemsSettings | None = None,
     ensure_scheduler_started()
     app.include_router(curtain_router)
     app.include_router(tv_router)
+    app.include_router(create_mcp_router(repo, hems, mcp_server))
 
     @app.get("/api/{unknown:path}", include_in_schema=False)
     def unknown_api(unknown: str):

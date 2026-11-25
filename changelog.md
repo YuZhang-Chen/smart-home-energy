@@ -2,6 +2,29 @@
 
 記錄各版本的重要變更，最新版本放最上方。格式參考 [Sample CHANGELOG](https://gist.github.com/juampynr/4c18214a8eb554084e21d6e288a18a2c)，使用版本號、日期及 Added／Changed／Fixed 分類；版本 commit 以對應的 `v{版本號}:` 開頭。既有未編版紀錄保留原標題。
 
+## [1.6.2] - 2026-11-25
+
+將 `Main Agent` 與 5 個設備子代理（`Washer Agent`、`AC Agent`、`Light Agent`、`TV Agent`、`Curtain Agent`）的工具與資源存取層正式升級為官方標準 MCP（Model Context Protocol）架構，支援基於角色的權限過濾（Role-Scoped Tools & Resources）與系統診斷頁 MCP 協定目錄檢視。對應 commit：`v1.6.2: integrate official MCP protocol layer with role-scoped tools, resources, and diagnostics`。
+
+### Added
+
+- 導入官方 Python `mcp` SDK（`mcp>=1.2,<2`），新增 `SmartHomeMCPServer`（`mcp_server.py`），以標準 `mcp.server.Server` 與 `mcp.types` 定義全系統 MCP Resources（`home://state`、`home://roles`、`home://tariffs/taipower` 及 5 台設備的 `device://<id>/context`）與 Role-Scoped MCP Tools。
+- 在 FastAPI `8502` 服務公開標準 MCP JSON-RPC 2.0 端點（`POST /api/mcp`，支援 `initialize`、`ping`、`resources/list`、`resources/read`、`tools/list`、`tools/call`，可透過 `X-Agent-Role` Header 或 `params.role` 指定角色）與協定目錄端點（`GET /api/mcp/manifest`），同時支援 `python -m smart_home_energy.mcp_server` stdio 模式。
+- 前端「系統診斷」頁（`SystemViews.tsx`）新增 `mcp_server: "online (MCP SDK)"` 服務狀態卡與「MCP 協定目錄（Resources & Role-Scoped Tools）」摺疊面板，直觀展示各角色授權工具與資源 URI。
+- 新增標準 MCP JSON-RPC 端點、資源讀取、角色專屬工具清單過濾、跨角色／跨設備越權呼叫攔截，以及前端診斷頁 MCP 目錄渲染測試（`test_api.py`、`controls.test.tsx`）。
+
+### Changed
+
+- 擴充 `config/device_capabilities.json`、`src/smart_home_energy/data/device_capabilities.json` 與 `agent_roles.py`，將 `TV Agent`（`tv-1`）與 `Curtain Agent`（`curtain-1`）正式納入權責登錄表，並將 `Main Agent` 可委派設備擴充至 5 台設備，作為 MCP 協定層的唯一權限真理來源（Single Source of Truth）。
+- 將 `multi_agent.py`、`light_agent.py`、`tv.py` 與 `curtain.py` 的工具呼叫與上下文讀取統一接上 `SmartHomeMCPServer`，於 `tool_logs` 統一標記 `"protocol": "MCP"` 與 `"mcp_method": "tools/call"`。
+- `pyproject.toml` 與 `scripts/start.ps1` 啟動檢查納入 `mcp` 依賴；於 `README.md` 與 `docs/ASSISTANT_UI.md` 補足 `.env` 環境變數配置與快速啟動說明。
+
+### Validation
+
+- Python `test_api.py`、`test_light_agent.py`、`test_agent.py` 與 `test_assistant_service.py` 共 30 項測試通過（1 項 opt-in 真實模型測試略過）。
+- 前端 Vitest 24 項互動測試與 Vite 正式建置通過。
+
+
 ## [1.6.1] - 2026-11-24
 
 將 `TV Agent` 與 `Curtain Agent` 升級為由 `Main Agent` 階層委派、真正串接 AI Model（vLLM／Azure OpenAI）的 Tool-Calling 情境感知子代理，並補齊 3D 客廳電視模型與設備清單的即時視覺回饋。對應 commit：`v1.6.1: upgrade TV and Curtain agents to hierarchical LLM tool-calling and add 3D TV visual feedback`。

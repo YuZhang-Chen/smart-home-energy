@@ -307,6 +307,7 @@ async def tv_session(repo, event, budget, parent_id, root_id, progress=None):
     """Run TV Agent using the configured LLM provider with deterministic fallback when no model is configured."""
     from smart_home_energy.agent import ProviderUnavailable, ProviderConfigurationError
     from smart_home_energy.domain import encode
+    from smart_home_energy.mcp_server import MCPToolExecutionError, SmartHomeMCPServer
     from smart_home_energy.repository import AgentRun
 
     started = budget.monotonic()
@@ -314,6 +315,7 @@ async def tv_session(repo, event, budget, parent_id, root_id, progress=None):
     run_id = uuid4().hex
     original_text = event.payload.get("text", "")
     tools = TVTools(repo, root_id, original_text)
+    mcp = SmartHomeMCPServer(repo)
     status = "failed"
     message = "電視指令未完成"
     provider_name = "none"
@@ -322,7 +324,7 @@ async def tv_session(repo, event, budget, parent_id, root_id, progress=None):
         progress("TV Agent 正在分析電視控制需求")
 
     try:
-        context = tools.get_tv_context()
+        context = mcp.call_tool_value("TV Agent", "get_tv_context", {}, tool_instance=tools)
         if not budget.providers:
             # Offline / model-free unit test fallback
             outcome = execute_command(original_text)
@@ -332,6 +334,8 @@ async def tv_session(repo, event, budget, parent_id, root_id, progress=None):
             repo.log_tool(
                 run_id,
                 {
+                    "protocol": "MCP",
+                    "mcp_method": "tools/call",
                     "role": "TV Agent",
                     "provider": provider_name,
                     "device_id": "tv-1",
@@ -362,16 +366,15 @@ async def tv_session(repo, event, budget, parent_id, root_id, progress=None):
                         break
                     if set(action) != {"tool", "arguments", "summary"} or not isinstance(action["summary"], str):
                         raise ValueError("工具動作格式不符")
-                    result = tools.call(action["tool"], action["arguments"])
-                    repo.log_tool(
-                        run_id,
-                        {
-                            "role": "TV Agent",
-                            "provider": provider_name,
-                            "device_id": "tv-1",
-                            "action": action,
-                            "result": result,
-                        },
+                    result = mcp.call_tool_value(
+                        "TV Agent",
+                        action["tool"],
+                        action["arguments"],
+                        tool_instance=tools,
+                        run_id=run_id,
+                        provider=provider_name,
+                        device_id="tv-1",
+                        summary=action["summary"],
                     )
                     messages.extend(
                         [
@@ -384,7 +387,8 @@ async def tv_session(repo, event, budget, parent_id, root_id, progress=None):
                         message = str(result["message"])
                         break
                 except (ValueError, TypeError, KeyError, OverflowError, RecursionError) as error:
-                    repo.log_tool(run_id, {"role": "TV Agent", "device_id": "tv-1", "error": str(error)})
+                    if not isinstance(error, MCPToolExecutionError):
+                        repo.log_tool(run_id, {"protocol": "MCP", "role": "TV Agent", "device_id": "tv-1", "error": str(error)})
                     messages.append({"role": "user", "content": json.dumps({"error": str(error)}, ensure_ascii=False)})
     except (ProviderUnavailable, ProviderConfigurationError) as error:
         try:

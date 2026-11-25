@@ -1,6 +1,6 @@
 {
   "Main Agent": {
-    "devices": ["washer-1", "ac-1", "bulb-1"],
+    "devices": ["washer-1", "ac-1", "bulb-1", "tv-1", "curtain-1"],
     "can": ["read_home", "read_roles", "delegate"],
     "cannot": ["control_device", "approve_task"]
   },
@@ -18,6 +18,16 @@
     "devices": ["bulb-1"],
     "can": ["read_bulb", "submit_explicit_light_action"],
     "cannot": ["control_other_device", "create_rule", "delegate"]
+  },
+  "TV Agent": {
+    "devices": ["tv-1"],
+    "can": ["read_tv", "control_tv"],
+    "cannot": ["control_other_device", "approve_task", "delegate"]
+  },
+  "Curtain Agent": {
+    "devices": ["curtain-1"],
+    "can": ["read_curtain", "control_curtain", "schedule_curtain"],
+    "cannot": ["control_other_device", "approve_task", "delegate"]
   },
   "Controller": {
     "devices": ["washer-1", "ac-1", "bulb-1"],

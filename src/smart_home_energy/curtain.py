@@ -312,6 +312,7 @@ async def curtain_session(repo, event, budget, parent_id, root_id, progress=None
     """Run Curtain Agent using the configured LLM provider with deterministic fallback when no model is configured."""
     from smart_home_energy.agent import ProviderUnavailable, ProviderConfigurationError
     from smart_home_energy.domain import encode
+    from smart_home_energy.mcp_server import MCPToolExecutionError, SmartHomeMCPServer
     from smart_home_energy.repository import AgentRun
 
     started = budget.monotonic()
@@ -319,6 +320,7 @@ async def curtain_session(repo, event, budget, parent_id, root_id, progress=None
     run_id = uuid4().hex
     original_text = event.payload.get("text", "")
     tools = CurtainTools(repo, root_id, original_text)
+    mcp = SmartHomeMCPServer(repo)
     status = "failed"
     message = "窗簾指令未完成"
     provider_name = "none"
@@ -339,7 +341,7 @@ async def curtain_session(repo, event, budget, parent_id, root_id, progress=None
         return msg, st
 
     try:
-        context = tools.get_curtain_context()
+        context = mcp.call_tool_value("Curtain Agent", "get_curtain_context", {}, tool_instance=tools)
         if not budget.providers:
             message, st = _deterministic_curtain_fallback(original_text)
             provider_name = "deterministic-curtain-agent"
@@ -347,6 +349,8 @@ async def curtain_session(repo, event, budget, parent_id, root_id, progress=None
             repo.log_tool(
                 run_id,
                 {
+                    "protocol": "MCP",
+                    "mcp_method": "tools/call",
                     "role": "Curtain Agent",
                     "provider": provider_name,
                     "device_id": "curtain-1",
@@ -377,16 +381,15 @@ async def curtain_session(repo, event, budget, parent_id, root_id, progress=None
                         break
                     if set(action) != {"tool", "arguments", "summary"} or not isinstance(action["summary"], str):
                         raise ValueError("工具動作格式不符")
-                    result = tools.call(action["tool"], action["arguments"])
-                    repo.log_tool(
-                        run_id,
-                        {
-                            "role": "Curtain Agent",
-                            "provider": provider_name,
-                            "device_id": "curtain-1",
-                            "action": action,
-                            "result": result,
-                        },
+                    result = mcp.call_tool_value(
+                        "Curtain Agent",
+                        action["tool"],
+                        action["arguments"],
+                        tool_instance=tools,
+                        run_id=run_id,
+                        provider=provider_name,
+                        device_id="curtain-1",
+                        summary=action["summary"],
                     )
                     messages.extend(
                         [
@@ -399,7 +402,8 @@ async def curtain_session(repo, event, budget, parent_id, root_id, progress=None
                         message = str(result["message"])
                         break
                 except (ValueError, TypeError, KeyError, OverflowError, RecursionError) as error:
-                    repo.log_tool(run_id, {"role": "Curtain Agent", "device_id": "curtain-1", "error": str(error)})
+                    if not isinstance(error, MCPToolExecutionError):
+                        repo.log_tool(run_id, {"protocol": "MCP", "role": "Curtain Agent", "device_id": "curtain-1", "error": str(error)})
                     messages.append({"role": "user", "content": json.dumps({"error": str(error)}, ensure_ascii=False)})
     except (ProviderUnavailable, ProviderConfigurationError) as error:
         try:

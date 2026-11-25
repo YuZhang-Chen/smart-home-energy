@@ -1512,6 +1512,13 @@ footer i {
 .diagnostic-section { margin: 12px 0; padding: 14px 18px; background: #fffefa; border: 1px solid #e7e6db; border-radius: 12px; }
 .diagnostic-section summary { cursor: pointer; color: #465548; }
 .diagnostic-section pre { max-height: 330px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; color: #5b6256; }
+.mcp-catalog { margin-top: 12px; display: grid; gap: 14px; }
+.mcp-block h3 { font-size: 13px; color: #415847; margin-bottom: 8px; }
+.mcp-block ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 12px; color: #535d52; }
+.mcp-block code { background: #eef1e8; padding: 1px 6px; border-radius: 5px; font-size: 11px; color: #364b3b; }
+.mcp-role-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
+.mcp-role-card { padding: 12px 14px; background: #f8f9f3; border: 1px solid #e4e6da; border-radius: 10px; display: grid; gap: 6px; align-content: start; }
+.mcp-role-card strong { font-size: 13px; color: #3e5243; }
 .drawer-scrim { position: fixed; inset: 0; z-index: 40; display: flex; align-items: stretch; background: #20281e55; }
 .device-drawer { width: min(430px, calc(100vw - 24px)); max-height: 100dvh; overflow-y: auto; padding: 20px; background: #f7f7f0; box-shadow: 14px 0 48px #1723192b; animation: drawer-in .18s ease-out; }
 .drawer-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; color: #3d4c3f; }
