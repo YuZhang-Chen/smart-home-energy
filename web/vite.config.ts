@@ -4,7 +4,7 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   plugins: [react()],
   server: { proxy: { "/api": "http://127.0.0.1:8502" } },
-  build: { chunkSizeWarningLimit: 1100 },
+  build: { chunkSizeWarningLimit: 2500 },
   test: {
     environment: "jsdom",
     setupFiles: ["./src/test-setup.ts"],

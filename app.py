@@ -22,6 +22,30 @@ import time
 import uvicorn
 
 try:
+    import huggingface_hub
+
+    if not hasattr(huggingface_hub, "HfFolder"):
+        class _HfFolderCompat:
+            @classmethod
+            def get_token(cls) -> str | None:
+                try:
+                    return huggingface_hub.get_token()
+                except Exception:
+                    return os.getenv("HF_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN")
+
+            @classmethod
+            def save_token(cls, token: str) -> None:
+                pass
+
+            @classmethod
+            def delete_token(cls) -> None:
+                pass
+
+        huggingface_hub.HfFolder = _HfFolderCompat  # type: ignore[attr-defined]
+except ImportError:
+    pass
+
+try:
     import spaces
 
     @spaces.GPU
