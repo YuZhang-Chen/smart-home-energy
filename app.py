@@ -22,6 +22,9 @@ import time
 import uvicorn
 
 ROOT = Path(__file__).resolve().parent
+SRC_DIR = ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
 
 
 def _port_open(host: str, port: int, timeout: float = 0.5) -> bool:
@@ -64,6 +67,8 @@ def _start_background_services(api_port: int, runtime_port: int) -> list[subproc
     os.environ["HEMS_PYTHON_API_URL"] = f"http://127.0.0.1:{api_port}"
     os.environ["HEMS_COPILOT_RUNTIME_PORT"] = str(runtime_port)
     os.environ["HEMS_COPILOT_RUNTIME_URL"] = f"http://127.0.0.1:{runtime_port}"
+    existing_pythonpath = os.environ.get("PYTHONPATH", "")
+    os.environ["PYTHONPATH"] = f"{SRC_DIR}{os.pathsep}{existing_pythonpath}" if existing_pythonpath else str(SRC_DIR)
 
     processes: list[subprocess.Popen] = []
 

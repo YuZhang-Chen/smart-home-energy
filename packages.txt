@@ -1,4 +1,2 @@
 mosquitto
 mosquitto-clients
-nodejs
-npm
