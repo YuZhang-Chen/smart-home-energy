@@ -1,3 +1,14 @@
+---
+title: Smart Home Energy & 3D Living Room
+emoji: 🏠
+colorFrom: blue
+colorTo: green
+sdk: gradio
+sdk_version: 5.0.0
+app_file: app.py
+pinned: false
+---
+
 # 基於多代理Agent、Matter 與 MQTT 之情境感知智慧家庭能源管理系統
 
 產品展示名稱：**日常之間：家庭能源助理與 3D 智慧客廳**

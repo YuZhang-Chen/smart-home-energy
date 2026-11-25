@@ -412,9 +412,10 @@ def main():
     import argparse
     import uvicorn
     parser = argparse.ArgumentParser(description="智慧客廳本機入口")
-    parser.add_argument("--port", type=int, default=8502)
+    parser.add_argument("--host", type=str, default=os.getenv("HEMS_HOST", "127.0.0.1"))
+    parser.add_argument("--port", type=int, default=int(os.getenv("PORT", "8502")))
     args = parser.parse_args()
-    uvicorn.run(create_app(), host="127.0.0.1", port=args.port)
+    uvicorn.run(create_app(), host=args.host, port=args.port)
 
 
 if __name__ == "__main__":
