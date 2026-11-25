@@ -21,6 +21,16 @@ import time
 
 import uvicorn
 
+try:
+    import spaces
+
+    @spaces.GPU
+    def _hf_zerogpu_placeholder() -> None:
+        """Satisfy Hugging Face ZeroGPU startup check when Space hardware is set to ZeroGPU."""
+        return None
+except ImportError:
+    pass
+
 ROOT = Path(__file__).resolve().parent
 SRC_DIR = ROOT / "src"
 if str(SRC_DIR) not in sys.path:
