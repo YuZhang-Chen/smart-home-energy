@@ -1,5 +1,7 @@
 # P1 純規則與 P2 離線報告
 
+2026-11-26 更新：日夜自動照明（不含人體感應）已透過 `lighting_runner.py` 接入 Controller、REST API 與前端設定頁；人體感應（presence）、Light Agent 規則草稿與 CHAT-01／02 維持待辦。
+
 2026-11-02：本輪純規則與離線報告完成。這不是 Controller／設備整合完成，也不是 P0–P2 整體驗收通過。
 
 ## 純規則

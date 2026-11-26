@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Command, Home, RequestStatus } from "./types";
+import type { Command, Home, LightingSnapshot, RequestStatus } from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -89,6 +89,32 @@ export function useHome() {
     refresh,
     realNow: arrival.current.server + (tick - arrival.current.client),
   };
+}
+
+export function useLighting() {
+  const [lighting, setLighting] = useState<LightingSnapshot | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let active = true;
+    const load = () =>
+      json<LightingSnapshot>("/api/lighting")
+        .then((next) => {
+          if (active) {
+            setLighting(next);
+            setError("");
+          }
+        })
+        .catch(() => {
+          if (active) setError("無法讀取自動照明狀態，請確認服務已啟動。");
+        });
+    void load();
+    const timer = window.setInterval(load, 4000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, []);
+  return { lighting, error };
 }
 
 export function useCommands(refresh: () => void) {

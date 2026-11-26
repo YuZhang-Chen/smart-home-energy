@@ -26,7 +26,7 @@ LLM 可串接**地端大型語言模型**：以 vLLM 在本機或區域網路伺
 
 目前實作進度、已知缺口與下一階段順序見[進度盤點與後續規劃](docs/PROGRESS_AND_NEXT_STEPS.md)（2026-11-02）。
 
-P1 純照明規則與 P2 離線量測已提供，可執行 `python -m smart_home_energy.research --repeats 10 --output artifacts/research`，產生獨立 JSON／CSV／Markdown 報告；使用方式及驗收見[離線照明規則](docs/OFFLINE_LIGHTING.md)。
+P1 日夜自動照明規則（不含人體感應）已接入 Controller 背景迴圈、REST API（`GET /api/lighting`）與「偏好設定 › 自動照明」介面；離線量測可執行 `python -m smart_home_energy.research --repeats 10 --output artifacts/research`，產生獨立 JSON／CSV／Markdown 報告；使用方式及驗收見[離線照明規則](docs/OFFLINE_LIGHTING.md)。
 
 ## 主要設計
 

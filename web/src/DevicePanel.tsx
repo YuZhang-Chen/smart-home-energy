@@ -686,6 +686,42 @@ export default function DevicePanel({
               ? "設備回報已過期，保留最後數值" : bulbState.transitioning
                 ? "燈光調整中" : bulbState.fault ?? "設備狀態已同步"}
           </div>
+          {home?.devices["bulb-1"]?.automation && (() => {
+            const auto = home.devices["bulb-1"].automation!;
+            const overrideClock = auto.override_until
+              ? new Intl.DateTimeFormat("zh-TW", {
+                  timeZone: "Asia/Taipei",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                  hour12: false,
+                }).format(new Date(auto.override_until))
+              : null;
+            const summary = !auto.enabled
+              ? "自動照明：已停用"
+              : auto.reason === "manual_override"
+                ? `自動照明：手動暫停至 ${overrideClock ?? "下一時段"}`
+                : auto.reason === "day"
+                  ? "自動照明：白天關燈"
+                  : `自動照明：晚間 ${auto.brightness}% · ${auto.kelvin}K`;
+            return (
+              <div className="light-automation-strip">
+                <span className={`status-tag ${auto.enabled && auto.reason !== "manual_override" ? "active" : ""}`}>
+                  {summary}
+                </span>
+                {auto.enabled && auto.reason === "manual_override" && (
+                  <button
+                    type="button"
+                    className="secondary-action"
+                    disabled={busy || !connected}
+                    onClick={() => submit("lighting_resume", { device_id: "bulb-1" })}
+                  >
+                    恢復自動
+                  </button>
+                )}
+                {auto.last_error && <p className="fine-print">{auto.last_error}</p>}
+              </div>
+            );
+          })()}
           <div className="light-preview" data-on={lightOn}>
             <div className="light-orb" />
             <span>

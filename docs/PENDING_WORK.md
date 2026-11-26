@@ -1,6 +1,8 @@
 # 待處理工作與 P1／P2 執行條件
 
-**實作更新（2026-11-02）：P1 純規則、狀態序列化、測試與 P2 離線執行器／三種報告已完成，17 情境各 10 次通過；操作與驗收見 [OFFLINE_LIGHTING.md](OFFLINE_LIGHTING.md)。以下保留先前依賴評估；Controller、REST、設定頁、資料庫遷移與設備仲裁仍未完成。CHAT-01／02 維持延後。**
+**實作更新（2026-11-26）：燈泡新舊指令取代仲裁（`BulbController.process_requests`）已完成；P1 日夜自動照明（不含人體感應）已透過 `lighting_runner.py` 接入 Controller、REST API（`GET /api/lighting`、`lighting_rule`、`lighting_resume`）、前端設定頁與燈泡抽屜，Light Agent 亦可讀取並說明規則狀態。人體感應（presence）、Light Agent 規則草稿及 CHAT-01／02 維持待辦。**
+
+**實作更新（2026-11-02）：P1 純規則、狀態序列化、測試與 P2 離線執行器／三種報告已完成，17 情境各 10 次通過；操作與驗收見 [OFFLINE_LIGHTING.md](OFFLINE_LIGHTING.md)。以下保留先前依賴評估。**
 
 更新：2026-11-02（Asia/Taipei）。本文件依使用者最新指示，調整原先「P0 全部通過才開始 P1」的開發順序；不變更既有驗收結果。此次僅記錄待辦與評估可行性，未啟動 P1／P2 實作。
 

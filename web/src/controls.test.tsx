@@ -9,7 +9,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App, { LightActionCard, ProposalCard } from "./App";
-import { DiagnosticsView } from "./SystemViews";
+import { DiagnosticsView, SettingsView } from "./SystemViews";
 import { useCommands } from "./api";
 import DevicePanel, { PlanForm } from "./DevicePanel";
 import {
@@ -540,6 +540,78 @@ describe("diagnostics MCP catalog", () => {
     expect(screen.getByText("home://state")).toBeInTheDocument();
     expect(screen.getByText("control_tv")).toBeInTheDocument();
     view.unmount();
+    fetchMock.mockRestore();
+  });
+});
+
+describe("lighting automation settings", () => {
+  it("submits lighting_rule payload and shows resume only during manual_override", async () => {
+    const user = userEvent.setup();
+    const submit = vi.fn();
+    let reason = "night";
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (path) => {
+      const url = String(path);
+      if (url.includes("/api/lighting")) {
+        return new Response(
+          JSON.stringify({
+            rule: {
+              enabled: true,
+              day_start: 360,
+              night_start: 1080,
+              brightness: 40,
+              kelvin: 2700,
+              presence_enabled: false,
+              version: 2,
+            },
+            status: {
+              window: "night",
+              reason,
+              override_until: reason === "manual_override" ? "2026-11-27T06:00:00+08:00" : null,
+              next_boundary: "2026-11-27T06:00:00+08:00",
+              last_request_id: null,
+              last_request_status: null,
+              last_error: null,
+              evaluated_at: "2026-11-26T21:00:00+08:00",
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          preferences: { target_c: 26, minimum_c: 24, maximum_c: 28, duration_minutes: 120, washer_hours: 6, quiet_start: 1380, quiet_end: 420 },
+          tariff: { plan: "simulated", baseline_kwh: {} },
+          tariff_plans: { simulated: "模擬費率" },
+          tariff_source: { source_url: "local", retrieved_at: "" },
+          clock: { speed: 1 },
+          active_tasks: [],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+
+    const first = render(<SettingsView submit={submit} busy={false} />);
+    expect(await screen.findByText("自動照明")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "恢復自動" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "儲存自動照明" }));
+    expect(submit).toHaveBeenCalledWith("lighting_rule", {
+      device_id: "bulb-1",
+      expected_version: 2,
+      enabled: true,
+      day_start: 360,
+      night_start: 1080,
+      brightness: 40,
+      kelvin: 2700,
+      presence_enabled: false,
+    });
+    first.unmount();
+
+    reason = "manual_override";
+    const second = render(<SettingsView submit={submit} busy={false} />);
+    const resumeBtn = await screen.findByRole("button", { name: "恢復自動" });
+    await user.click(resumeBtn);
+    expect(submit).toHaveBeenCalledWith("lighting_resume", { device_id: "bulb-1" });
+    second.unmount();
     fetchMock.mockRestore();
   });
 });

@@ -429,6 +429,74 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(tv_payload['status']['volume'], 22)
         self.assertTrue(tv_payload['status']['power'])
 
+    def test_lighting_api_and_validation(self):
+        res = self.client.get('/api/lighting')
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        self.assertFalse(body['rule']['enabled'])
+        self.assertEqual(body['rule']['version'], 1)
+        self.assertEqual(body['status']['reason'], 'disabled')
+
+        home = self.client.get('/api/home').json()
+        self.assertIn('automation', home['devices']['bulb-1'])
+        self.assertFalse(home['devices']['bulb-1']['automation']['enabled'])
+
+        # Reject presence_enabled=True
+        bad_presence = self.client.post('/api/requests', json={
+            'request_id': 'req-bad-presence',
+            'kind': 'lighting_rule',
+            'payload': {
+                'device_id': 'bulb-1',
+                'expected_version': 1,
+                'enabled': True,
+                'day_start': 360,
+                'night_start': 1080,
+                'brightness': 40,
+                'kelvin': 2700,
+                'presence_enabled': True,
+            },
+        })
+        self.assertEqual(bad_presence.status_code, 422)
+
+        # Reject identical day_start and night_start
+        bad_bounds = self.client.post('/api/requests', json={
+            'request_id': 'req-bad-bounds',
+            'kind': 'lighting_rule',
+            'payload': {
+                'device_id': 'bulb-1',
+                'expected_version': 1,
+                'enabled': True,
+                'day_start': 600,
+                'night_start': 600,
+                'brightness': 40,
+                'kelvin': 2700,
+            },
+        })
+        self.assertEqual(bad_bounds.status_code, 422)
+
+        # Valid lighting_rule and lighting_resume requests are accepted
+        ok_rule = self.client.post('/api/requests', json={
+            'request_id': 'req-ok-rule',
+            'kind': 'lighting_rule',
+            'payload': {
+                'device_id': 'bulb-1',
+                'expected_version': 1,
+                'enabled': True,
+                'day_start': 360,
+                'night_start': 1080,
+                'brightness': 40,
+                'kelvin': 2700,
+            },
+        })
+        self.assertEqual(ok_rule.status_code, 202)
+
+        ok_resume = self.client.post('/api/requests', json={
+            'request_id': 'req-ok-resume',
+            'kind': 'lighting_resume',
+            'payload': {'device_id': 'bulb-1'},
+        })
+        self.assertEqual(ok_resume.status_code, 202)
+
 
 if __name__ == '__main__':
     unittest.main()

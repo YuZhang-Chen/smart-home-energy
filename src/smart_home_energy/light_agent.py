@@ -288,13 +288,15 @@ class LightTools:
         self.seen = None
 
     def get_light_context(self):
+        from smart_home_energy.lighting_runner import lighting_summary
 
         data = self.repo.device("bulb-1")
         state = decode(BulbState, data) if data else None
+        now = utcnow()
 
         self.seen = (
             (state.boot_id, state.state_version)
-            if state and fresh(state, utcnow())
+            if state and fresh(state, now)
             else None
         )
 
@@ -302,7 +304,8 @@ class LightTools:
             "device_id": "bulb-1",
             "state": data,
             "fresh": self.seen is not None,
-            "scope": "只能依本次使用者需求操作客廳燈；日夜自動規則尚未啟用",
+            "automation": lighting_summary(self.repo, now),
+            "scope": "只能依本次使用者需求操作客廳燈；可讀取並說明日夜自動照明狀態，但不能建立或修改規則",
         }
 
     def submit_light_action(
@@ -516,6 +519,8 @@ LIGHT_SYSTEM = """你是 Light Agent，只能處理客廳智慧燈泡 bulb-1。
 
 若資訊不足或設備狀態不新鮮：
 {"ask": "具體問題"}
+
+若使用者詢問目前自動照明規則、或詢問為什麼燈泡自動開關／被手動暫停，請依據 tool_result.automation 的內容以 {"finish": "說明"} 回答，並提醒使用者若需啟用、停用或修改時段，可至「偏好設定 › 自動照明」調整；Light Agent 不能建立或修改自動規則。
 
 重要規則：
 1. arguments 必須是 JSON 物件。

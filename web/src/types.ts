@@ -156,11 +156,48 @@ export interface BulbState {
   transitioning: boolean;
   fault: string | null;
 }
+export interface LightingRuleConfig {
+  enabled: boolean;
+  day_start: number;
+  night_start: number;
+  brightness: number;
+  kelvin: number;
+  presence_enabled: boolean;
+  version: number;
+}
+export interface LightingRuleStatus {
+  window: "day" | "night" | string;
+  reason: string;
+  override_until: string | null;
+  next_boundary: string | null;
+  last_request_id: string | null;
+  last_request_status: string | null;
+  last_error: string | null;
+  evaluated_at: string | null;
+}
+export interface LightingSnapshot {
+  rule: LightingRuleConfig;
+  status: LightingRuleStatus;
+}
+export interface LightingAutomationSummary {
+  enabled: boolean;
+  day_start: number;
+  night_start: number;
+  brightness: number;
+  kelvin: number;
+  version: number;
+  window: string;
+  reason: string;
+  override_until: string | null;
+  next_boundary: string | null;
+  last_error: string | null;
+}
 export interface BulbSnapshot {
   state: BulbState | null;
   fresh: boolean;
   active_task: null;
   latest_task: null;
+  automation?: LightingAutomationSummary;
 }
 export interface CurtainState {
   device_id: "curtain-1";

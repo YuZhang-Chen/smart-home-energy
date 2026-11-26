@@ -179,7 +179,40 @@ class RefreshTariffRequest(RequestInput):
     payload: dict = Field(default_factory=dict)
 
 
-WebRequest = Annotated[ACRequest | WasherRequest | ApprovalRequest | TaskRequest | DetailsRequest | ConfirmedRequest | BulbRequest | PreferencesRequest | TariffRequest | ClockRequest | RefreshTariffRequest,
+class LightingRulePayload(Input):
+    device_id: Literal["bulb-1"] = "bulb-1"
+    expected_version: int = Field(ge=1)
+    enabled: bool = Field(strict=True)
+    day_start: int = Field(ge=0, le=1439)
+    night_start: int = Field(ge=0, le=1439)
+    brightness: float = Field(ge=1, le=100)
+    kelvin: float = Field(ge=2700, le=6500)
+    presence_enabled: bool = Field(default=False, strict=True)
+
+    @model_validator(mode="after")
+    def rule_valid(self):
+        if self.day_start == self.night_start:
+            raise ValueError("白天與晚間開始時間不能相同")
+        if self.presence_enabled:
+            raise ValueError("人體感應功能尚未啟用")
+        return self
+
+
+class LightingRuleRequest(RequestInput):
+    kind: Literal["lighting_rule"]
+    payload: LightingRulePayload
+
+
+class LightingResumePayload(Input):
+    device_id: Literal["bulb-1"] = "bulb-1"
+
+
+class LightingResumeRequest(RequestInput):
+    kind: Literal["lighting_resume"]
+    payload: LightingResumePayload = Field(default_factory=LightingResumePayload)
+
+
+WebRequest = Annotated[ACRequest | WasherRequest | ApprovalRequest | TaskRequest | DetailsRequest | ConfirmedRequest | BulbRequest | PreferencesRequest | TariffRequest | ClockRequest | RefreshTariffRequest | LightingRuleRequest | LightingResumeRequest,
                        Body(discriminator="kind")]
 
 
@@ -194,17 +227,21 @@ def create_app(repo: Repository | None = None, hems: HemsSettings | None = None,
     @app.get("/api/home")
     def home():
         from smart_home_energy import curtain, tv
+        from smart_home_energy.lighting_runner import lighting_summary
         with repo.transaction():
             clock, real = repo.clock(), utcnow()
             devices = {}
             for identifier in ("ac-1", "washer-1", "bulb-1"):
                 state = repo.device(identifier)
                 fresh = bool(state and -2 <= (real - datetime.fromisoformat(state["observed_at"])).total_seconds() <= 10)
-                devices[identifier] = {
+                entry = {
                     "state": state, "fresh": fresh,
                     "active_task": encode(repo.active_task(identifier)) if identifier != "bulb-1" else None,
                     "latest_task": encode(repo.latest_task(identifier)) if identifier != "bulb-1" else None,
                 }
+                if identifier == "bulb-1":
+                    entry["automation"] = lighting_summary(repo, real)
+                devices[identifier] = entry
             devices["curtain-1"] = {
                 "state": curtain.get_status(),
                 "fresh": True,
@@ -313,6 +350,12 @@ def create_app(repo: Repository | None = None, hems: HemsSettings | None = None,
         with repo.transaction() as db:
             samples = [{"device_id": row[0], **json.loads(row[1])} for row in db.execute("SELECT device_id,data FROM samples ORDER BY id DESC LIMIT 900")]
         return {"incremental_cost": household_estimate(repo, hems.tariff()), "tasks": repo.recent_tasks(), "samples": list(reversed(samples))}
+
+    @app.get("/api/lighting")
+    def lighting():
+        from smart_home_energy.lighting_runner import lighting_snapshot
+        with repo.transaction():
+            return lighting_snapshot(repo, utcnow())
 
     @app.get("/api/settings")
     def settings():

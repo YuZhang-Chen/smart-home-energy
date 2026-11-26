@@ -2,6 +2,24 @@
 
 記錄各版本的重要變更，最新版本放最上方。格式參考 [Sample CHANGELOG](https://gist.github.com/juampynr/4c18214a8eb554084e21d6e288a18a2c)，使用版本號、日期及 Added／Changed／Fixed 分類；版本 commit 以對應的 `v{版本號}:` 開頭。既有未編版紀錄保留原標題。
 
+## [v1.6.3] - 2026-11-26
+
+將既有的日夜自動照明純規則（`lighting_rules.py`）接入 Controller 背景迴圈、REST API 與 React 中控台（不含人體感應），並讓 `Light Agent` 可讀取及說明規則狀態。
+
+### Added
+
+- 新增 `LightingRuleRunner`（`src/smart_home_energy/lighting_runner.py`）並接入 `control.py` 背景迴圈（排在 `BulbController` 之前），支援白天關燈、晚間暖光設定、手動操作自動覆寫至下一個時段邊界、恢復自動、去重與最多 3 次失敗重試。
+- FastAPI 新增 `GET /api/lighting`、`lighting_rule`／`lighting_resume` 持久化請求驗證（拒絕版本不符、相同時段邊界與 `presence_enabled=true`），並於 `/api/home` 的 `bulb-1` 附帶 `automation` 摘要。
+- 前端「偏好設定」（`SystemViews.tsx`）新增「自動照明」設定與狀態區塊；燈泡抽屜（`DevicePanel.tsx`）顯示自動照明狀態徽章與「恢復自動」按鈕。
+- 新增 `tests/test_lighting_runner.py`（10 項整合情境），並補齊 `test_api.py`、`test_light_agent.py` 與 `web/src/controls.test.tsx` 測試。
+
+### Changed
+
+- `LightTools.get_light_context()`（含 MCP `device://bulb-1/context`）附帶 `automation` 狀態，`Light Agent` 可向使用者說明自動照明與手動暫停原因，維持不得建立或修改規則的權限邊界。
+- 更新 `docs/PENDING_WORK.md`、`docs/OFFLINE_LIGHTING.md` 與 `README.md`，更正燈泡指令取代仲裁已完成並反映最新 P1 狀態。
+
+---
+
 ## [1.6.2] - 2026-11-25
 
 將 `Main Agent` 與 5 個設備子代理（`Washer Agent`、`AC Agent`、`Light Agent`、`TV Agent`、`Curtain Agent`）的工具與資源存取層正式升級為官方標準 MCP（Model Context Protocol）架構，支援基於角色的權限過濾（Role-Scoped Tools & Resources）與系統診斷頁 MCP 協定目錄檢視。對應 commit：`v1.6.2: integrate official MCP protocol layer with role-scoped tools, resources, and diagnostics`。

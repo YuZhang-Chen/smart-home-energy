@@ -641,6 +641,19 @@ footer i {
   cursor: pointer;
 }
 .light-settings button:disabled { opacity: 0.5; cursor: not-allowed; }
+.light-automation-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+.light-automation-strip .secondary-action {
+  min-height: 28px;
+  margin: 0;
+  padding: 0 10px;
+  font-size: 11px;
+}
 .panel-topline {
   display: flex;
   align-items: center;

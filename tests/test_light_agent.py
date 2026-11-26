@@ -54,6 +54,10 @@ class LightAgentTests(unittest.TestCase):
             unrelated.call("submit_light_action", {"power": True})
         with self.assertRaises(ValueError):
             tools.call("create_rule", {"at": "21:00"})
+        ctx = tools.call("get_light_context", {})
+        self.assertIn("automation", ctx)
+        self.assertFalse(ctx["automation"]["enabled"])
+        self.assertEqual(ctx["automation"]["reason"], "disabled")
         self.assertEqual(self.repo.pending_requests(), [])
 
     def test_language_delegates_and_queues_one_light_action_without_claiming_completion(self):
