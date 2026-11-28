@@ -32,6 +32,7 @@ import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import { devices, isAnimating, type DeviceId, type Home } from "./types";
 import { calculateDayNight, displayedMinute, type DayNightState } from "./dayNight";
 import CurtainPanels from "./CurtainPanels";
+import OutdoorScene from "./OutdoorScene";
 
 type Vec = [number, number, number];
 const wood = "#bb9065",
@@ -254,7 +255,16 @@ function Walls() {
         <Block at={[0, 3.1, -3.1]} size={[8.25, 0.06, 0.24]} color="#f7f1e7" />
       </group>
       <group ref={left}>
-        <Block at={[-4.1, 1.55, 0]} size={[0.18, 3.1, 6.2]} color="#eeeadf" />
+        {/* 左牆依落地窗洞（Z: -2.2 ~ 1.5, Y: 0.2 ~ 2.85）分段開孔，讓窗外庭園可透視 */}
+        <Block at={[-4.1, 1.55, -2.65]} size={[0.18, 3.1, 0.9]} color="#eeeadf" />
+        <Block at={[-4.1, 1.55, 2.3]} size={[0.18, 3.1, 1.6]} color="#eeeadf" />
+        <Block at={[-4.1, 0.1, -0.35]} size={[0.18, 0.2, 3.7]} color="#eeeadf" />
+        <Block at={[-4.1, 2.975, -0.35]} size={[0.18, 0.25, 3.7]} color="#eeeadf" />
+        {/* 落地窗洞外框收邊 */}
+        <Block at={[-4.1, 0.21, -0.35]} size={[0.22, 0.05, 3.76]} color="#dfd7c6" />
+        <Block at={[-4.1, 2.84, -0.35]} size={[0.22, 0.05, 3.76]} color="#dfd7c6" />
+        <Block at={[-4.1, 1.525, -2.2]} size={[0.22, 2.66, 0.06]} color="#dfd7c6" />
+        <Block at={[-4.1, 1.525, 1.5]} size={[0.22, 2.66, 0.06]} color="#dfd7c6" />
         <Block at={[-3.98, 0.1, 0]} size={[0.05, 0.16, 6]} color="#d1c4ad" />
         <Block at={[-4.1, 3.1, 0]} size={[0.24, 0.06, 6.25]} color="#f7f1e7" />
       </group>
@@ -691,13 +701,13 @@ function DayNightLighting({ clock, reduced }: { clock: DayNightState; reduced: b
         intensity={0}
         color="#ffd0a0"
         castShadow
-        shadow-mapSize={[1024, 1024]}
-        shadow-camera-left={-7}
-        shadow-camera-right={7}
-        shadow-camera-top={7}
-        shadow-camera-bottom={-7}
+        shadow-mapSize={[2048, 2048]}
+        shadow-camera-left={-15}
+        shadow-camera-right={15}
+        shadow-camera-top={15}
+        shadow-camera-bottom={-15}
         shadow-camera-near={0.1}
-        shadow-camera-far={32}
+        shadow-camera-far={42}
         shadow-normalBias={0.045}
         shadow-bias={-0.00008}
       />
@@ -709,14 +719,29 @@ function DayNightLighting({ clock, reduced }: { clock: DayNightState; reduced: b
 function CameraRig({ reset }: { reset: number }) {
   const controls = useRef<OrbitControlsImpl>(null);
   const { camera, size } = useThree();
+  const baseZoom = Math.min(size.width / 17.5, size.height / 13.5);
+  const baseZoomRef = useRef(baseZoom);
+
+  // 僅於初次掛載或點擊「重設視角」時重置鏡頭位置與目標點，避免對話框開關造成視角跳動
   useEffect(() => {
-    camera.position.set(10, 14.942, 10);
-    camera.zoom = Math.min(size.width / 14, size.height / 11);
+    camera.position.set(12, 16.5, 12);
+    camera.zoom = baseZoomRef.current;
     camera.updateProjectionMatrix();
-    controls.current?.target.set(0, 0.8, 0);
+    controls.current?.target.set(0, 0.6, 0.2);
     controls.current?.update();
-    // Resize adjusts framing; polling and device selection do not touch the camera.
-  }, [camera, reset, size.width, size.height]);
+  }, [camera, reset]);
+
+  // 畫布尺寸於 100% ↔ 75% 切換時，保留使用者當前的旋轉角度與焦點，僅等比調整縮放
+  useEffect(() => {
+    const prevBase = baseZoomRef.current;
+    if (prevBase > 0 && baseZoom > 0 && prevBase !== baseZoom) {
+      const scaled = camera.zoom * (baseZoom / prevBase);
+      camera.zoom = MathUtils.clamp(scaled, baseZoom * 0.55, baseZoom * 2.8);
+      camera.updateProjectionMatrix();
+    }
+    baseZoomRef.current = baseZoom;
+  }, [camera, baseZoom]);
+
   return (
     <OrbitControls
       ref={controls}
@@ -726,8 +751,8 @@ function CameraRig({ reset }: { reset: number }) {
       dampingFactor={0.08}
       minPolarAngle={Math.PI / 7}
       maxPolarAngle={Math.PI / 2.5}
-      minZoom={Math.min(size.width / 14, size.height / 11) * 0.65}
-      maxZoom={Math.min(size.width / 14, size.height / 11) * 2.3}
+      minZoom={baseZoom * 0.55}
+      maxZoom={baseZoom * 2.8}
     />
   );
 }
@@ -838,6 +863,7 @@ export default function Scene({
             <CameraRig reset={reset} />
             <LabelTracker id={activeLabel} element={label} />
             <DayNightLighting clock={dayNight} reduced={reduced} />
+            <OutdoorScene clock={dayNight} reduced={reduced} />
             <Furniture />
             {pick(
               "ac-1",
@@ -919,11 +945,18 @@ export default function Scene({
               "curtain-1",
               [-3.9, 0, -0.35],
               <>
-                <Block
-                  at={[0, 1.52, 0]}
-                  size={[0.07, 2.65, 3.7]}
-                  color={sceneLighting.window}
-                />
+                {/* 落地窗半透明玻璃：拉開窗簾時可直接透視左側庭園 */}
+                <mesh position={[-0.14, 1.52, 0]}>
+                  <boxGeometry args={[0.04, 2.65, 3.7]} />
+                  <meshStandardMaterial
+                    color={sceneLighting.window}
+                    transparent
+                    opacity={0.22}
+                    roughness={0.08}
+                    metalness={0.1}
+                    depthWrite={false}
+                  />
+                </mesh>
                 <Block
                   at={[0.05, 1.52, 0]}
                   size={[0.04, 2.65, 0.06]}
@@ -960,7 +993,7 @@ export default function Scene({
             {pick("fan-1", [3.05, 0, 1.55], <Fan />)}
             <mesh
               rotation={[-Math.PI / 2, 0, 0]}
-              position={[0, -0.43, 0]}
+              position={[0, -0.87, 0]}
               receiveShadow
             >
               <planeGeometry args={[200, 200]} />

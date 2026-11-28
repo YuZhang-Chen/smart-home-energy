@@ -16,6 +16,9 @@
 }
 body {
   margin: 0;
+  /* 防止 CopilotSidebar 動態寫入 body margin-inline 擠壓主畫面與 3D 渲染畫布 */
+  margin-inline: 0 !important;
+  transition: none !important;
 }
 button,
 input {
@@ -74,9 +77,15 @@ fieldset {
   min-width: 0;
 }
 .app-shell {
+  width: 100%;
   max-width: 1680px;
-  margin: auto;
+  margin: 0 auto;
   padding: 0 52px;
+  transition:
+    width 0.28s ease,
+    max-width 0.28s ease,
+    margin 0.28s ease,
+    padding 0.28s ease;
 }
 .topbar {
   height: 94px;
@@ -219,7 +228,7 @@ footer i {
 }
 .workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 348px;
+  grid-template-columns: minmax(0, 1fr);
   gap: 26px;
   align-items: start;
 }
@@ -1184,7 +1193,7 @@ footer i {
     height: 610px;
   }
   .workspace {
-    grid-template-columns: minmax(0, 1fr) 370px;
+    grid-template-columns: minmax(0, 1fr);
   }
   .device-panel {
     padding: 28px;
@@ -1198,7 +1207,7 @@ footer i {
     padding: 0 28px;
   }
   .workspace {
-    grid-template-columns: minmax(0, 1fr) 310px;
+    grid-template-columns: minmax(0, 1fr);
     gap: 18px;
   }
   .device-panel {
@@ -1542,9 +1551,40 @@ footer i {
 .proposal-actions { display: flex; gap: 8px; }
 .proposal-actions > button { flex: 1; }
 @keyframes drawer-in { from { transform: translateX(-12px); opacity: .7; } to { transform: translateX(0); opacity: 1; } }
-body:has(.drawer-scrim) { overflow: hidden; }
+
+@media (min-width: 861px) {
+  .app-shell[data-panel-open="right"] {
+    width: 75vw;
+    max-width: 75vw;
+    margin-left: 0;
+    margin-right: 25vw;
+    padding-inline: clamp(20px, 2.8vw, 48px);
+  }
+  .app-shell[data-panel-open="left"] {
+    width: 75vw;
+    max-width: 75vw;
+    margin-left: 25vw;
+    margin-right: 0;
+    padding-inline: clamp(20px, 2.8vw, 48px);
+  }
+  [data-copilot-sidebar] {
+    width: 25vw !important;
+    max-width: 25vw !important;
+  }
+  .drawer-scrim {
+    width: 25vw;
+    right: auto;
+    background: transparent;
+  }
+  .device-drawer {
+    width: 100%;
+    border-right: 1px solid #e2e4d9;
+    box-shadow: 8px 0 32px #1723191a;
+  }
+}
 
 @media (max-width: 860px) {
+  body:has(.drawer-scrim) { overflow: hidden; }
   .topbar nav { overflow-x: auto; max-width: 66vw; }
   .nav-button,.nav-current { font-size: 12px; }
   .drawer-scrim { align-items: flex-end; }

@@ -4,6 +4,7 @@ import {
   clockWithMode,
   displayedMinute,
   localMinute,
+  outdoorLampFactor,
   replaySimulation,
   setManualMinute,
   setPausedSimulationMinute,
@@ -82,5 +83,19 @@ describe("natural light", () => {
     expect(calculateDayNight(360).sunPosition[0]).toBeLessThan(0);
     expect(calculateDayNight(720).sunPosition[1]).toBeGreaterThan(calculateDayNight(360).sunPosition[1]);
     expect(calculateDayNight(1080).sunPosition[0]).toBeGreaterThan(0);
+  });
+
+  it("turns outdoor garden lamps on at dusk/night and off during daytime", () => {
+    expect(outdoorLampFactor(0)).toBe(1);
+    expect(outdoorLampFactor(330)).toBe(1);
+    expect(outdoorLampFactor(375)).toBeGreaterThan(0);
+    expect(outdoorLampFactor(375)).toBeLessThan(1);
+    expect(outdoorLampFactor(420)).toBe(0);
+    expect(outdoorLampFactor(720)).toBe(0);
+    expect(outdoorLampFactor(1020)).toBe(0);
+    expect(outdoorLampFactor(1080)).toBeCloseTo(0.5, 4);
+    expect(outdoorLampFactor(1140)).toBe(1);
+    expect(calculateDayNight(1200).outdoorLampIntensity).toBe(1);
+    expect(calculateDayNight(720).outdoorLampIntensity).toBe(0);
   });
 });

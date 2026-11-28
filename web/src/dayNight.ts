@@ -19,6 +19,7 @@ export type DayNightLighting = {
   hemisphereIntensity: number;
   sunIntensity: number;
   sunPosition: [number, number, number];
+  outdoorLampIntensity: number;
   phase: string;
 };
 
@@ -100,6 +101,14 @@ function daylightAt(minute: number): number {
   return Math.sin(((hour - 6) / 12) * Math.PI);
 }
 
+export function outdoorLampFactor(minute: number): number {
+  const hour = (((minute % DAY_MINUTES) + DAY_MINUTES) % DAY_MINUTES) / 60;
+  if (hour >= 19 || hour <= 5.5) return 1;
+  if (hour >= 7 && hour <= 17) return 0;
+  if (hour > 17 && hour < 19) return smooth((hour - 17) / 2);
+  return 1 - smooth((hour - 5.5) / 1.5);
+}
+
 export function calculateDayNight(minute: number): DayNightLighting {
   const time = ((minute % DAY_MINUTES) + DAY_MINUTES) % DAY_MINUTES;
   const daylight = daylightAt(time);
@@ -119,6 +128,7 @@ export function calculateDayNight(minute: number): DayNightLighting {
     hemisphereIntensity: 0.35 + daylight * 0.9,
     sunIntensity: Math.pow(daylight, 0.72) * 2.4,
     sunPosition: [-10 * Math.cos(Math.PI * sunPhase), Math.max(0.35, 1 + 11 * sunHeight), 5],
+    outdoorLampIntensity: outdoorLampFactor(time),
     phase: phaseForMinute(time),
   };
 }

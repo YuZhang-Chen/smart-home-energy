@@ -2,6 +2,34 @@
 
 記錄各版本的重要變更，最新版本放最上方。格式參考 [Sample CHANGELOG](https://gist.github.com/juampynr/4c18214a8eb554084e21d6e288a18a2c)，使用版本號、日期及 Added／Changed／Fixed 分類；版本 commit 以對應的 `v{版本號}:` 開頭。既有未編版紀錄保留原標題。
 
+## [v1.6.5] - 2026-11-28
+
+為 Three.js 智慧客廳新增 Low-Poly 溫馨庭園微縮底座場景與左側落地窗透視效果，整合日夜自動點亮庭園燈與輕微環境動態，並重構左右側邊對話框為 75% / 25% 平滑並排佈局以徹底解決渲染畫布被擠壓與鏡頭跳動問題。對應 commit：`v1.6.5: add 3D outdoor garden diorama, transparent window view, and 75/25 anti-squeeze sidebar layout`。
+
+### Added
+
+- 新增室外庭園場景元件 `web/src/OutdoorScene.tsx`：於客廳四周建立雙層圓角微縮底座（大地土壤基座與莫蘭迪草皮層）、客廳前緣石階與石板踏石小徑、6 棵松樹／圓冠 Low-Poly 樹群、多組灌木花叢、左側與後側低矮木圍籬及前庭戶外休閒長椅。
+- 新增 4 盞日夜聯動庭園柱燈（分布於左窗外、前庭、右庭與後庭）及輕微環境動態（樹冠微風搖曳與高空 Low-Poly 飄浮雲朵，皆遵循 `prefers-reduced-motion`）。
+- 擴充 `web/src/dayNight.ts` 新增 `outdoorLampFactor(minute)` 純函式與 `DayNightLighting.outdoorLampIntensity` 欄位（白天熄滅、黃昏平滑點亮、夜晚維持、清晨漸暗），並於 `web/src/dayNight.test.ts` 補齊單元測試。
+
+### Changed
+
+- 更新 `web/src/Scene.tsx`：將左側牆面依落地窗洞（Z `-2.2`–`1.5`、Y `0.2`–`2.85`）分段開孔並加上外框收邊，將 `curtain-1` 落地窗改為半透明玻璃材質，拉開窗簾時可直接從客廳透視左側庭園景致。
+- 擴大 `DayNightLighting` 太陽陰影覆蓋範圍至 `±15`（`shadow-mapSize: [2048, 2048]`、`far: 42`），並下移底部透明陰影平面至微縮底座下方（`y = -0.87`），讓整座庭園與樹木皆具清晰日夜投影。
+- 調整 `web/src/App.tsx` 與 `web/src/style.css`：於 `.app-shell` 加入 `data-panel-open` 狀態標記，將 `CopilotSidebar` 寬度改為 `25vw`，於桌機版（`≥ 861px`）實作主畫面 `75vw` 與左／右側邊面板 `25vw` 的平滑並排切換（關閉後恢復 `100%` 滿版），且開啟左側設備控制面板時仍可直接操作右側 3D 畫面。
+
+### Fixed
+
+- 鎖定 `body` 水平外距（`margin-inline: 0 !important`）以防止 `CopilotSidebar` 動態修改 `document.body.style` 造成主畫面重複推移與畫布擠壓，並移除 `.workspace` 殘留的舊版雙欄空列。
+- 重構 `Scene.tsx` 的 `CameraRig`，將「重設視角」與「畫布尺寸變更」拆離，使畫布於 `100%` ↔ `75%` 切換時保留使用者當前旋轉角度與目標點、僅等比微調縮放，消除切換對話框時的 3D 視角跳動。
+
+### Validation
+
+- 前端 Vitest 27 項單元與互動測試全數通過（`dayNight.test.ts` 11/11、`controls.test.tsx` 16/16）。
+- 前端 `npm run build`（`check:runtime && tsc -b && vite build`）型別檢查與生產建置通過。
+
+---
+
 ## [v1.6.4] - 2026-11-28
 
 補強智慧窗簾（`curtain-1`）與其他設備一致的 Main Agent／Controller 整合架構：納入常駐 `CurtainController` 與持久化操作日誌、將每日排程改用 `repo.clock()` 邏輯時鐘以完整支援 60 倍展示模式、補齊 `Curtain Agent` 刪除與啟用／停用排程的 MCP 工具，並修復多設備同時協作時的跨設備路由與開關語意誤判。對應 commit：`v1.6.4: integrate CurtainController, durable operation logs, 60x logical-clock schedules, and multi-device routing fixes`。

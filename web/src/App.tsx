@@ -203,8 +203,9 @@ export default function App() {
     setAssistantOpen(open);
     if (open) setDrawerOpen(false);
   }, []);
+  const panelOpen = drawerOpen ? "left" : assistantOpen ? "right" : "none";
   return (
-    <div className="app-shell">
+    <div className="app-shell" data-panel-open={panelOpen}>
       <header className="topbar">
         <a className="brand" href="/" aria-label="日常之間 首頁">
           <span className="brand-icon">
@@ -408,7 +409,7 @@ export default function App() {
         threadId="home"
         open={assistantOpen}
         onOpenChange={handleAssistantOpenChange}
-        width={420}
+        width="25vw"
         labels={COPILOT_LABELS}
       />
     </div>
