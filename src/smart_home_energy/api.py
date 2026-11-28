@@ -494,8 +494,10 @@ def create_app(repo: Repository | None = None, hems: HemsSettings | None = None,
                 controller_status = "online" if -2 <= age <= 10 else "stale"
             except (TypeError, ValueError):
                 controller_status = "unknown"
+        from smart_home_energy.asr import is_asr_configured
         return {"services": {"api": "online", "copilot_runtime": runtime_status,
                 "controller": controller_status, "mcp_server": "online (MCP SDK)",
+                "asr": "configured" if is_asr_configured() else "unconfigured",
                 "transport": os.getenv("HEMS_TRANSPORT", "mqtt")},
                 "mcp_catalog": mcp_server.catalog(),
                 "clock": encode(repo.clock()), "requests": repo.records("requests", 50), "agent_runs": repo.records("agent_runs", 50),
@@ -509,7 +511,7 @@ def create_app(repo: Repository | None = None, hems: HemsSettings | None = None,
         query = request.url.query
         url = f"{runtime_url}/api/copilotkit/{path}" + (f"?{query}" if query else "")
         headers = {key: value for key, value in request.headers.items() if key.lower() in {"accept", "content-type", "last-event-id", "authorization"}}
-        client = httpx.AsyncClient(timeout=httpx.Timeout(connect=2, read=None, write=10, pool=2))
+        client = httpx.AsyncClient(timeout=httpx.Timeout(connect=2, read=None, write=30, pool=2))
         try:
             upstream = await client.send(client.build_request(request.method, url, headers=headers, content=await request.body()), stream=True)
         except httpx.RequestError as error:
@@ -536,6 +538,35 @@ def create_app(repo: Repository | None = None, hems: HemsSettings | None = None,
             payload = json.loads(row["payload"])
             result["target"] = {key: payload[key] for key in ("power", "brightness_percent", "kelvin") if payload.get(key) is not None}
         return result
+
+    @app.post("/api/asr/transcribe")
+    async def asr_transcribe(request: Request):
+        from urllib.parse import unquote
+        from smart_home_energy.asr import (
+            AsrAuthError,
+            AsrConfigurationError,
+            AsrInputError,
+            AsrRateLimitError,
+            AsrUpstreamError,
+            transcribe_audio,
+        )
+        audio_bytes = await request.body()
+        content_type = request.headers.get("content-type", "audio/webm")
+        raw_filename = request.headers.get("x-audio-filename", "")
+        filename = unquote(raw_filename) if raw_filename else None
+        try:
+            text = await transcribe_audio(audio_bytes, content_type=content_type, filename=filename)
+        except AsrConfigurationError as error:
+            raise HTTPException(503, str(error)) from error
+        except AsrInputError as error:
+            raise HTTPException(error.status_code, str(error)) from error
+        except AsrAuthError as error:
+            raise HTTPException(401, str(error)) from error
+        except AsrRateLimitError as error:
+            raise HTTPException(429, str(error)) from error
+        except AsrUpstreamError as error:
+            raise HTTPException(502, str(error)) from error
+        return {"text": text}
 
     from smart_home_energy.curtain import create_curtain_router
     from smart_home_energy.tv import create_tv_router

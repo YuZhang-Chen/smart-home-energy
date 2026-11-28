@@ -2,6 +2,31 @@
 
 記錄各版本的重要變更，最新版本放最上方。格式參考 [Sample CHANGELOG](https://gist.github.com/juampynr/4c18214a8eb554084e21d6e288a18a2c)，使用版本號、日期及 Added／Changed／Fixed 分類；版本 commit 以對應的 `v{版本號}:` 開頭。既有未編版紀錄保留原標題。
 
+## [v1.7.0] - 2026-11-29
+
+串接 vLLM OpenAI-compatible Whisper ASR（`model="Asr"`）至前端「家庭助理」側邊欄對話框，支援在瀏覽器直接錄製語音、自動轉為 16 kHz 單聲道 WAV 上傳辨識（保留語言自動偵測以利中英混合指令），並將轉錄結果填入輸入框供使用者確認後送出。對應 commit：`v1.7.0: integrate vLLM Whisper ASR into frontend chat dialog`。
+
+### Added
+
+- 新增後端 ASR 服務模組 `src/smart_home_energy/asr.py`：`AsrConfig.from_env()` 預設沿用 `VLLM_BASE_URL` 與 `VLLM_API_KEY`、預設模型為 `"Asr"`（可由 `VLLM_ASR_MODEL`／`VLLM_ASR_LANGUAGE` 覆寫），透過 `openai.AsyncOpenAI` 呼叫 `/v1/audio/transcriptions` 並內建 10 MB 上限與安全錯誤轉換（不外洩憑證）。
+- 新增 FastAPI 端點 `POST /api/asr/transcribe`（直接接收原始音訊位元組與 `Content-Type`／`X-Audio-Filename` 標頭，無需額外安裝 `python-multipart`），並於 `/api/diagnostics` 回報 `asr` 設定狀態。
+- 新增瀏覽器音訊轉檔工具 `web/src/audioWav.ts`：使用原生 Web Audio API（`AudioContext` + `OfflineAudioContext`）將 `MediaRecorder` 產生的 `audio/webm` 自動重取樣並編碼為 16 kHz 單聲道 16-bit PCM WAV，解決上游 LiteLLM／Whisper 不接受 `webm` 格式的問題。
+- 新增後端測試 `tests/test_asr.py`（8 項涵蓋設定載入、副檔名對齊、大小／格式驗證與 HTTP 錯誤對應）與前端測試 `web/src/audioWav.test.ts`（驗證 16 kHz PCM WAV 標頭與資料長度）。
+
+### Changed
+
+- 更新 `web/runtime/server.ts`：新增 `PythonBackedTranscriptionService` 並註冊至 `CopilotRuntime`，自動啟用 CopilotKit v2 原生語音錄製與 `/api/copilotkit/transcribe` 流程。
+- 更新 `web/src/App.tsx`：新增 `VoiceChatInput` 包裝 `CopilotChatInput` 於上傳前自動轉為 WAV，並於 `COPILOT_LABELS` 補齊繁體中文語音按鈕標籤（「語音輸入」、「取消錄音」、「完成錄音並辨識」）。
+- 更新 `src/smart_home_energy/api.py`：將 `/api/copilotkit/{path:path}` Proxy 的 `write` 逾時由 10 秒放寬至 30 秒以支援較長錄音上傳。
+- 更新 `.env.example`：補充 `VLLM_ASR_MODEL=Asr` 與選用 `VLLM_ASR_LANGUAGE` 設定說明。
+
+### Validation
+
+- 後端 pytest：`tests/test_asr.py`（8/8）與 `tests/test_api.py`（14/14）全數通過。
+- 前端 Vitest（30/30）、`npm run check:runtime` 與 `npm run build` 正式建置皆通過。
+
+---
+
 ## [v1.6.6.2] - 2026-11-29
 
 補強智慧電視（`tv-1`）與其他設備一致的常駐 Controller／SQLite 持久化操作日誌架構，將前端 `TVControl` 手動控制接入 `/api/requests` 佇列、自然語言指令改經 Main Agent（AG-UI）委派執行，並為 `tv-1` 與 `curtain-1` 補齊與客廳燈一致的極簡聊天室狀態回執卡。與 `v1.6.6.1` 一同收錄於 commit：`v1.6.6: add 3D live YouTube TV, TVController durable logs, Main Agent TV panel, and TV/curtain status cards`。

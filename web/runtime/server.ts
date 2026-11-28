@@ -1,6 +1,11 @@
 import { createServer } from "node:http";
 import { EventType, HttpAgent, type BaseEvent } from "@ag-ui/client";
-import { CopilotRuntime, InMemoryAgentRunner } from "@copilotkit/runtime/v2";
+import {
+  CopilotRuntime,
+  InMemoryAgentRunner,
+  TranscriptionService,
+  type TranscribeFileOptions,
+} from "@copilotkit/runtime/v2";
 import { createCopilotNodeListener } from "@copilotkit/runtime/v2/node";
 import { Observable } from "rxjs";
 
@@ -71,11 +76,36 @@ class PythonBackedRunner extends InMemoryAgentRunner {
   }
 }
 
+class PythonBackedTranscriptionService extends TranscriptionService {
+  constructor(private readonly baseUrl: string) {
+    super();
+  }
+
+  override async transcribeFile({ audioFile, mimeType }: TranscribeFileOptions): Promise<string> {
+    const contentType = mimeType || audioFile.type || "audio/webm";
+    const filename = audioFile.name || "recording.webm";
+    const response = await fetch(`${this.baseUrl}/api/asr/transcribe`, {
+      method: "POST",
+      headers: {
+        "Content-Type": contentType,
+        "X-Audio-Filename": encodeURIComponent(filename),
+      },
+      body: await audioFile.arrayBuffer(),
+    });
+    const payload = await response.json().catch(() => ({})) as { text?: string; detail?: string };
+    if (!response.ok) {
+      throw new Error(payload.detail || `ASR HTTP ${response.status}`);
+    }
+    return (payload.text ?? "").trim();
+  }
+}
+
 const runtime = new CopilotRuntime({
   agents: {
     home: new HttpAgent({ url: `${pythonApi}/api/assistant/ag-ui` }),
   },
   runner: new PythonBackedRunner(),
+  transcriptionService: new PythonBackedTranscriptionService(pythonApi),
 });
 
 const port = Number(process.env.HEMS_COPILOT_RUNTIME_PORT ?? 8503);

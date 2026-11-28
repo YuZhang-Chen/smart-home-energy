@@ -24,6 +24,7 @@ import {
 } from "./types";
 
 vi.mock("@copilotkit/react-core/v2", () => ({
+  CopilotChatInput: () => null,
   CopilotSidebar: () => null,
   useConfigureSuggestions: () => undefined,
   useRenderTool: () => undefined,

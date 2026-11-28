@@ -14,9 +14,16 @@ import {
   Wind,
   Blinds,
 } from "lucide-react";
-import { CopilotSidebar, useConfigureSuggestions, useRenderTool } from "@copilotkit/react-core/v2";
+import {
+  CopilotChatInput,
+  CopilotSidebar,
+  useConfigureSuggestions,
+  useRenderTool,
+  type CopilotChatInputProps,
+} from "@copilotkit/react-core/v2";
 import { z } from "zod";
 import { json, useCommands, useHome } from "./api";
+import { convertAudioBlobToWav } from "./audioWav";
 import DayNightControls from "./DayNightControls";
 import {
   calculateDayNight,
@@ -54,9 +61,32 @@ const icons = {
 
 // Keep the chat shell isolated from the room's frequent device-state updates.
 const MemoizedCopilotSidebar = memo(CopilotSidebar);
+const VoiceChatInput: typeof CopilotChatInput = Object.assign(
+  memo(function VoiceChatInput(props: CopilotChatInputProps) {
+    const originalOnFinish = props.onFinishTranscribeWithAudio;
+    const wrappedOnFinish = useCallback(
+      async (audioBlob: Blob) => {
+        if (!originalOnFinish) return;
+        const wavBlob = await convertAudioBlobToWav(audioBlob);
+        await originalOnFinish(wavBlob);
+      },
+      [originalOnFinish],
+    );
+    return (
+      <CopilotChatInput
+        {...props}
+        onFinishTranscribeWithAudio={originalOnFinish ? wrappedOnFinish : undefined}
+      />
+    );
+  }),
+  CopilotChatInput,
+);
 const COPILOT_LABELS = {
   modalHeaderTitle: "家庭助理",
   chatInputPlaceholder: "描述你想安排的設備需求…",
+  chatInputToolbarStartTranscribeButtonLabel: "語音輸入",
+  chatInputToolbarCancelTranscribeButtonLabel: "取消錄音",
+  chatInputToolbarFinishTranscribeButtonLabel: "完成錄音並辨識",
 };
 
 export default function App() {
@@ -431,6 +461,7 @@ export default function App() {
         onOpenChange={handleAssistantOpenChange}
         width="25vw"
         labels={COPILOT_LABELS}
+        input={VoiceChatInput}
       />
     </div>
   );
