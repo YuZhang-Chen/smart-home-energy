@@ -4,6 +4,6 @@
   "AC Agent": {"devices": ["ac-1"], "can": ["read_ac", "propose_ac_plan"], "cannot": ["approve_task", "control_device", "delegate"]},
   "Light Agent": {"devices": ["bulb-1"], "can": ["read_bulb", "submit_explicit_light_action"], "cannot": ["control_other_device", "create_rule", "delegate"]},
   "TV Agent": {"devices": ["tv-1"], "can": ["read_tv", "control_tv"], "cannot": ["control_other_device", "approve_task", "delegate"]},
-  "Curtain Agent": {"devices": ["curtain-1"], "can": ["read_curtain", "control_curtain", "schedule_curtain"], "cannot": ["control_other_device", "approve_task", "delegate"]},
-  "Controller": {"devices": ["washer-1", "ac-1", "bulb-1"], "can": ["validate_authorization", "dispatch_command", "confirm_feedback"], "cannot": ["infer_user_intent"]}
+  "Curtain Agent": {"devices": ["curtain-1"], "can": ["read_curtain", "control_curtain", "schedule_curtain", "manage_curtain_schedule"], "cannot": ["control_other_device", "approve_task", "delegate"]},
+  "Controller": {"devices": ["washer-1", "ac-1", "bulb-1", "curtain-1"], "can": ["validate_authorization", "dispatch_command", "confirm_feedback"], "cannot": ["infer_user_intent"]}
 }

@@ -207,11 +207,19 @@ export interface CurtainState {
   updated_at: string;
   duration_seconds?: number;
 }
+export interface CurtainSchedule {
+  id: string;
+  time: string;
+  position: number;
+  enabled: boolean;
+  last_run_date?: string | null;
+}
 export interface CurtainSnapshot {
   state: CurtainState | null;
   fresh: boolean;
   active_task: null;
   latest_task: null;
+  schedules?: CurtainSchedule[];
 }
 export interface TVState {
   device_id: "tv-1";

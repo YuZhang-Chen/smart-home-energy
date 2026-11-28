@@ -774,7 +774,13 @@ export default function DevicePanel({
     onRefresh={onRefresh}
   />
 ) : device.id === "curtain-1" ? (
-  <CurtainControl initialStatus={home?.devices["curtain-1"]?.state ?? null} />
+  <CurtainControl
+    initialStatus={home?.devices["curtain-1"]?.state ?? null}
+    initialSchedules={home?.devices["curtain-1"]?.schedules}
+    submit={submit}
+    busy={busy}
+    onRefresh={onRefresh}
+  />
 ) : (
   <div className="display-info">
           <Radio size={30} strokeWidth={1.3} />

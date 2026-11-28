@@ -10,6 +10,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App, { LightActionCard, ProposalCard } from "./App";
 import { DiagnosticsView, SettingsView } from "./SystemViews";
+import CurtainControl from "./CurtainControl";
 import { useCommands } from "./api";
 import DevicePanel, { PlanForm } from "./DevicePanel";
 import {
@@ -612,6 +613,69 @@ describe("lighting automation settings", () => {
     await user.click(resumeBtn);
     expect(submit).toHaveBeenCalledWith("lighting_resume", { device_id: "bulb-1" });
     second.unmount();
+    fetchMock.mockRestore();
+  });
+});
+
+describe("CurtainControl Main Agent & durable request queue integration", () => {
+  it("submits manual controls and schedule mutations through durable requests and routes natural language via /api/assistant/ag-ui", async () => {
+    const user = userEvent.setup();
+    const submit = vi.fn();
+    const onRefresh = vi.fn();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.endsWith("/api/curtain/status")) {
+        return new Response(
+          JSON.stringify({ device_id: "curtain-1", position: 0, target: 0, status: "stopped", updated_at: stamp }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (url.endsWith("/api/curtain/schedules")) {
+        return new Response(
+          JSON.stringify([{ id: "sched-1", time: "07:00", position: 100, enabled: true }]),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (url.endsWith("/api/assistant/ag-ui")) {
+        const sse = [
+          `data: ${JSON.stringify({ type: "CUSTOM", name: "assistant_progress", value: { text: "Main Agent 正在委派 Curtain Agent" } })}\n\n`,
+          `data: ${JSON.stringify({ type: "TEXT_MESSAGE_CONTENT", delta: "已停用客廳窗簾排程（07:00）。" })}\n\n`,
+        ].join("");
+        return new Response(sse, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+      }
+      return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+
+    const view = render(
+      <CurtainControl
+        initialStatus={{ device_id: "curtain-1", position: 0, target: 0, status: "stopped", updated_at: stamp }}
+        initialSchedules={[{ id: "sched-1", time: "07:00", position: 100, enabled: true }]}
+        submit={submit}
+        busy={false}
+        onRefresh={onRefresh}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /半開\s*50%/ }));
+    expect(submit).toHaveBeenCalledWith("curtain_scene", { device_id: "curtain-1", scene: "half" });
+
+    await user.click(screen.getByRole("button", { name: "刪除" }));
+    expect(submit).toHaveBeenCalledWith("curtain_schedule_delete", { device_id: "curtain-1", schedule_id: "sched-1" });
+
+    const inputEl = screen.getByLabelText("輸入窗簾中文指令");
+    await user.type(inputEl, "停用 07:00 排程");
+    await user.click(screen.getByRole("button", { name: "送出窗簾指令" }));
+
+    expect(await screen.findByText("已停用客廳窗簾排程（07:00）。")).toBeInTheDocument();
+    expect(onRefresh).toHaveBeenCalled();
+
+    const aguiCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/api/assistant/ag-ui"));
+    expect(aguiCall).toBeDefined();
+    const body = JSON.parse(String((aguiCall?.[1] as RequestInit)?.body ?? "{}"));
+    expect(body.threadId).toBe("home");
+    expect(body.messages[0].content).toContain("窗簾");
+
+    view.unmount();
     fetchMock.mockRestore();
   });
 });

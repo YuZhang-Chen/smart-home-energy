@@ -212,8 +212,93 @@ class LightingResumeRequest(RequestInput):
     payload: LightingResumePayload = Field(default_factory=LightingResumePayload)
 
 
-WebRequest = Annotated[ACRequest | WasherRequest | ApprovalRequest | TaskRequest | DetailsRequest | ConfirmedRequest | BulbRequest | PreferencesRequest | TariffRequest | ClockRequest | RefreshTariffRequest | LightingRuleRequest | LightingResumeRequest,
-                       Body(discriminator="kind")]
+class CurtainPositionPayload(Input):
+    device_id: Literal["curtain-1"] = "curtain-1"
+    position: float = Field(ge=0, le=100)
+    duration_seconds: float = Field(default=3.0, ge=0, le=120)
+
+
+class CurtainPositionRequest(RequestInput):
+    kind: Literal["curtain_position"]
+    payload: CurtainPositionPayload
+
+
+class CurtainStopPayload(Input):
+    device_id: Literal["curtain-1"] = "curtain-1"
+
+
+class CurtainStopRequest(RequestInput):
+    kind: Literal["curtain_stop"]
+    payload: CurtainStopPayload = Field(default_factory=CurtainStopPayload)
+
+
+class CurtainScenePayload(Input):
+    device_id: Literal["curtain-1"] = "curtain-1"
+    scene: Literal["open", "half", "close"]
+    duration_seconds: float = Field(default=2.0, ge=0, le=120)
+
+
+class CurtainSceneRequest(RequestInput):
+    kind: Literal["curtain_scene"]
+    payload: CurtainScenePayload
+
+
+class CurtainScheduleCreatePayload(Input):
+    device_id: Literal["curtain-1"] = "curtain-1"
+    time: str = Field(pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    position: float = Field(ge=0, le=100)
+    enabled: bool = Field(default=True, strict=True)
+
+
+class CurtainScheduleCreateRequest(RequestInput):
+    kind: Literal["curtain_schedule_create"]
+    payload: CurtainScheduleCreatePayload
+
+
+class CurtainScheduleTogglePayload(Input):
+    device_id: Literal["curtain-1"] = "curtain-1"
+    schedule_id: str | None = Field(default=None, min_length=1, max_length=128)
+    time: str | None = Field(default=None, pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    enabled: bool | None = Field(default=None, strict=True)
+
+    @model_validator(mode="after")
+    def target_present(self):
+        if self.schedule_id is None and self.time is None:
+            raise ValueError("請指定排程識別碼或時間")
+        return self
+
+
+class CurtainScheduleToggleRequest(RequestInput):
+    kind: Literal["curtain_schedule_toggle"]
+    payload: CurtainScheduleTogglePayload
+
+
+class CurtainScheduleDeletePayload(Input):
+    device_id: Literal["curtain-1"] = "curtain-1"
+    schedule_id: str | None = Field(default=None, min_length=1, max_length=128)
+    time: str | None = Field(default=None, pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    delete_all: bool = Field(default=False, strict=True)
+
+    @model_validator(mode="after")
+    def target_present(self):
+        if not self.delete_all and self.schedule_id is None and self.time is None:
+            raise ValueError("請指定要刪除的排程識別碼、時間或 delete_all")
+        return self
+
+
+class CurtainScheduleDeleteRequest(RequestInput):
+    kind: Literal["curtain_schedule_delete"]
+    payload: CurtainScheduleDeletePayload
+
+
+WebRequest = Annotated[
+    ACRequest | WasherRequest | ApprovalRequest | TaskRequest | DetailsRequest | ConfirmedRequest
+    | BulbRequest | PreferencesRequest | TariffRequest | ClockRequest | RefreshTariffRequest
+    | LightingRuleRequest | LightingResumeRequest
+    | CurtainPositionRequest | CurtainStopRequest | CurtainSceneRequest
+    | CurtainScheduleCreateRequest | CurtainScheduleToggleRequest | CurtainScheduleDeleteRequest,
+    Body(discriminator="kind"),
+]
 
 
 def create_app(repo: Repository | None = None, hems: HemsSettings | None = None,
@@ -243,10 +328,11 @@ def create_app(repo: Repository | None = None, hems: HemsSettings | None = None,
                     entry["automation"] = lighting_summary(repo, real)
                 devices[identifier] = entry
             devices["curtain-1"] = {
-                "state": curtain.get_status(),
+                "state": curtain.get_status(repo=repo),
                 "fresh": True,
                 "active_task": None,
                 "latest_task": None,
+                "schedules": curtain.list_schedules_data(repo),
             }
             devices["tv-1"] = {
                 "state": tv.get_status(),
@@ -430,10 +516,9 @@ def create_app(repo: Repository | None = None, hems: HemsSettings | None = None,
             result["target"] = {key: payload[key] for key in ("power", "brightness_percent", "kelvin") if payload.get(key) is not None}
         return result
 
-    from smart_home_energy.curtain import ensure_scheduler_started, router as curtain_router
+    from smart_home_energy.curtain import create_curtain_router
     from smart_home_energy.tv import router as tv_router
-    ensure_scheduler_started()
-    app.include_router(curtain_router)
+    app.include_router(create_curtain_router(repo))
     app.include_router(tv_router)
     app.include_router(create_mcp_router(repo, hems, mcp_server))
 

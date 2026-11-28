@@ -2,6 +2,37 @@
 
 記錄各版本的重要變更，最新版本放最上方。格式參考 [Sample CHANGELOG](https://gist.github.com/juampynr/4c18214a8eb554084e21d6e288a18a2c)，使用版本號、日期及 Added／Changed／Fixed 分類；版本 commit 以對應的 `v{版本號}:` 開頭。既有未編版紀錄保留原標題。
 
+## [v1.6.4] - 2026-11-28
+
+補強智慧窗簾（`curtain-1`）與其他設備一致的 Main Agent／Controller 整合架構：納入常駐 `CurtainController` 與持久化操作日誌、將每日排程改用 `repo.clock()` 邏輯時鐘以完整支援 60 倍展示模式、補齊 `Curtain Agent` 刪除與啟用／停用排程的 MCP 工具，並修復多設備同時協作時的跨設備路由與開關語意誤判。對應 commit：`v1.6.4: integrate CurtainController, durable operation logs, 60x logical-clock schedules, and multi-device routing fixes`。
+
+### Added
+
+- 新增常駐窗簾控制器 `CurtainController`（`src/smart_home_energy/curtain_control.py`）並接入 `control.py` 主迴圈，統一處理 6 種持久化請求（`curtain_position`、`curtain_stop`、`curtain_scene`、`curtain_schedule_create`、`curtain_schedule_toggle`、`curtain_schedule_delete`），並在 SQLite 的 `devices`、`commands`、`audit` 與 `requests` 表寫入完整操作日誌。
+- 新增 `evaluate_due_schedules(repo, real)` 邏輯時鐘區間掃描排程引擎（`curtain.py`），依 `repo.clock().now()` 與 `(last_logical_at, logical_now]` 區間觸發每日窗簾排程，完整支援 1×–100×（含 60× 展示模式）不漏觸發、同邏輯日不重複觸發，並於切換時鐘倍率時自動重置游標與寫入 `curtain_scheduler_clock_reset` 稽核紀錄。
+- 擴充 `CurtainTools`（`curtain.py`）與 `SmartHomeMCPServer`（`mcp_server.py`）新增 `delete_curtain_schedule` 與 `set_curtain_schedule_enabled` 兩項 MCP 工具，並同步補強無模型確定性指令解析（支援新增、啟用、停用與刪除排程）。
+- 新增 `tests/test_curtain.py`（5 項窗簾操作日誌、60× 邏輯時鐘排程與排程管理測試）與 `tests/test_multi_device_collab.py`（5 項 2–5 台設備同時協作、跨子句反義詞、多百分比數值隔離與部分失敗容錯測試），並於 `web/src/controls.test.tsx` 補上 `CurtainControl` 佇列與 Main Agent 測試。
+
+### Changed
+
+- 前端 `CurtainControl.tsx` 與 `DevicePanel.tsx`：手動位置、場景、停止與排程管理改透過 `POST /api/requests` 進入持久化佇列；面板內自然語言指令框改呼叫 `POST /api/assistant/ag-ui` 經由 Main Agent 委派給 Curtain Agent（MCP）執行，即時顯示處理進度並同步記錄於全屋對話與系統診斷日誌。
+- `api.py` 擴充 `WebRequest` 驗證模型、於 `/api/home` 的 `curtain-1` 附帶 `schedules` 清單，改以 `create_curtain_router(repo)` 綁定資料庫記錄相容端點操作日誌，並移除 API process 內重複啟動的系統時鐘排程執行緒。
+- 更新 `config/device_capabilities.json`、`src/smart_home_energy/data/device_capabilities.json`（`Controller.devices` 納入 `curtain-1`、`Curtain Agent` 補齊 `manage_curtain_schedule`）與 `multi_agent.py`（更新 Main Agent 提示詞並移除未經 MCP 的舊 `run_curtain_agent`）。
+
+### Fixed
+
+- 修正 `light_agent.py` 的 `_OTHER_DEVICE_RE` 漏列窗簾與電視關鍵字，避免包含窗簾或電視的複合指令（如「開一點窗簾並把客廳燈調到 60%」）被純燈泡快速路徑攔截而跳過 Main Agent。
+- 修正 `light_agent.py` 開關燈權限正則跨子句比對（`關掉.*燈`），改為限制於同一子句內比對，解決「把電視關掉，再把客廳燈打開」誤判為關燈而拒絕執行的問題。
+- 補強 `multi_agent.py` 的 `_AC_OTHER_DEVICE_RE`（納入 `音量`、`靜音`、`hdmi`、`blinds` 等關鍵字），避免混合多設備請求誤入冷氣快速路徑。
+- 補齊 `curtain_session` 在 LLM 不可用 fallback 分支的 `tool_logs` 紀錄。
+
+### Validation
+
+- Python `test_curtain.py`（5/5）、`test_multi_device_collab.py`（5/5）、`test_api.py`（14/14）、`test_light_agent.py`（5/5，1 live test skipped）、`test_lighting_runner.py`（10/10）、`test_control.py`（8/8）、`test_agent.py`（7/7）均通過。
+- 前端 Vitest 26 項互動測試與 Vite 正式建置通過。
+
+---
+
 ## [v1.6.3] - 2026-11-26
 
 將既有的日夜自動照明純規則（`lighting_rules.py`）接入 Controller 背景迴圈、REST API 與 React 中控台（不含人體感應），並讓 `Light Agent` 可讀取及說明規則狀態。

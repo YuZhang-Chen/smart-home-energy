@@ -278,6 +278,26 @@ def _build_role_tools() -> dict[str, list[types.Tool]]:
                     "enabled": {"type": "boolean"},
                 },
             ),
+            _tool_def(
+                "delete_curtain_schedule",
+                "刪除客廳智慧窗簾 (curtain-1) 每日定時開合排程（可依 schedule_id、time 或 delete_all 刪除）",
+                {
+                    "device_id": {"type": "string", "enum": ["curtain-1"]},
+                    "schedule_id": {"type": ["string", "null"]},
+                    "time": {"type": ["string", "null"]},
+                    "delete_all": {"type": "boolean"},
+                },
+            ),
+            _tool_def(
+                "set_curtain_schedule_enabled",
+                "啟用或停用客廳智慧窗簾 (curtain-1) 每日定時開合排程（可依 schedule_id 或 time 指定）",
+                {
+                    "device_id": {"type": "string", "enum": ["curtain-1"]},
+                    "enabled": {"type": ["boolean", "null"]},
+                    "schedule_id": {"type": ["string", "null"]},
+                    "time": {"type": ["string", "null"]},
+                },
+            ),
         ],
         "Controller": [],
     }
@@ -371,7 +391,7 @@ class SmartHomeMCPServer:
             if state and not any(task.device_id == device for task in active):
                 devices[device] = {**state, "task_id": None, "run_id": None, "plan_version": 0}
         devices["tv-1"] = get_tv_status()
-        devices["curtain-1"] = get_curtain_status()
+        devices["curtain-1"] = get_curtain_status(repo=self.repo)
         return {
             "tasks": encode(active),
             "clock": encode(self.repo.clock()),

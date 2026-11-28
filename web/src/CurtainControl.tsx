@@ -6,24 +6,19 @@ import {
   Clock3,
   Send,
 } from "lucide-react";
+import type { CurtainSchedule, CurtainState } from "./types";
 import "./curtain.css";
 
 const API = "/api/curtain";
 
-interface CurtainStatus {
-  device_id: string;
-  position: number;
-  target: number;
-  status: "moving" | "stopped";
-  updated_at: string;
-  duration_seconds?: number;
-}
+type SubmitFn = (kind: string, payload: Record<string, unknown>) => void;
 
-interface CurtainSchedule {
-  id: string;
-  time: string;
-  position: number;
-  enabled: boolean;
+interface CurtainControlProps {
+  initialStatus?: CurtainState | null;
+  initialSchedules?: CurtainSchedule[];
+  submit?: SubmitFn;
+  busy?: boolean;
+  onRefresh?: () => void;
 }
 
 async function apiRequest<T>(
@@ -46,22 +41,113 @@ async function apiRequest<T>(
   return data as T;
 }
 
+async function runViaMainAgent(
+  text: string,
+  onProgress: (msg: string) => void,
+): Promise<string> {
+  const runId = `curtain-${crypto.randomUUID()}`;
+  const messageId = `msg-${runId}`;
+  const content = /窗簾|窗帘|curtain|blinds/i.test(text) ? text : `窗簾：${text}`;
+
+  const response = await fetch("/api/assistant/ag-ui", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+    },
+    body: JSON.stringify({
+      threadId: "home",
+      runId,
+      state: {},
+      messages: [{ id: messageId, role: "user", content }],
+      tools: [],
+      context: [],
+      forwardedProps: {},
+    }),
+  });
+
+  if (!response.ok) {
+    let detail = "Main Agent 請求失敗";
+    try {
+      const err = await response.json();
+      if (typeof err?.detail === "string") detail = err.detail;
+    } catch {
+      // ignore non-json error body
+    }
+    throw new Error(detail);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    return "已送交 Main Agent 處理";
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let reply = "";
+  let runError = "";
+
+  const processChunk = (rawBlock: string) => {
+    const dataLines = rawBlock
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trim());
+    if (dataLines.length === 0) return;
+    const jsonText = dataLines.join("\n");
+    try {
+      const evt = JSON.parse(jsonText) as Record<string, unknown>;
+      const type = String(evt.type ?? "");
+      if (type === "CUSTOM" && evt.name === "assistant_progress") {
+        const val = evt.value as { text?: string } | undefined;
+        if (val?.text) onProgress(val.text);
+      } else if (type === "TEXT_MESSAGE_CONTENT" && typeof evt.delta === "string") {
+        reply += evt.delta;
+      } else if (type === "RUN_ERROR" && typeof evt.message === "string") {
+        runError = evt.message;
+      }
+    } catch {
+      // ignore heartbeat / non-json lines
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split(/\r?\n\r?\n/);
+    buffer = parts.pop() ?? "";
+    for (const part of parts) {
+      processChunk(part);
+    }
+  }
+  if (buffer.trim()) processChunk(buffer);
+
+  if (runError && !reply) {
+    throw new Error(runError);
+  }
+  return reply.trim() || "Main Agent 已完成窗簾指令。";
+}
+
 export default function CurtainControl({
   initialStatus,
-}: {
-  initialStatus?: CurtainStatus | null;
-} = {}) {
-  const [status, setStatus] = useState<CurtainStatus | null>(initialStatus ?? null);
+  initialSchedules,
+  submit,
+  busy: externalBusy = false,
+  onRefresh,
+}: CurtainControlProps = {}) {
+  const [status, setStatus] = useState<CurtainState | null>(initialStatus ?? null);
   const [sliderValue, setSliderValue] = useState(initialStatus?.target ?? 0);
   const editingSlider = useRef(false);
   const [command, setCommand] = useState("");
-  const [message, setMessage] = useState("正在連接窗簾設備...");
+  const [message, setMessage] = useState("你好！指令會經由 Main Agent 委派 Curtain Agent 執行並記錄操作日誌。");
   const [connected, setConnected] = useState(!!initialStatus);
-  const [busy, setBusy] = useState(false);
+  const [localBusy, setLocalBusy] = useState(false);
 
   const [scheduleTime, setScheduleTime] = useState("07:00");
   const [schedulePosition, setSchedulePosition] = useState(100);
-  const [schedules, setSchedules] = useState<CurtainSchedule[]>([]);
+  const [schedules, setSchedules] = useState<CurtainSchedule[]>(initialSchedules ?? []);
+
+  const busy = externalBusy || localBusy;
 
   useEffect(() => {
     if (!initialStatus) return;
@@ -70,9 +156,15 @@ export default function CurtainControl({
     setConnected(true);
   }, [initialStatus]);
 
+  useEffect(() => {
+    if (initialSchedules) {
+      setSchedules(initialSchedules);
+    }
+  }, [initialSchedules]);
+
   const loadStatus = useCallback(async () => {
     try {
-      const result = await apiRequest<CurtainStatus>("/status");
+      const result = await apiRequest<CurtainState>("/status");
       setStatus(result);
       if (!editingSlider.current) setSliderValue(result.target);
       setConnected(true);
@@ -93,8 +185,10 @@ export default function CurtainControl({
 
   useEffect(() => {
     void loadStatus();
-    void loadSchedules();
-  }, [loadStatus, loadSchedules]);
+    if (!initialSchedules) {
+      void loadSchedules();
+    }
+  }, [loadStatus, loadSchedules, initialSchedules]);
 
   // Only poll while the curtain is actively moving; zero polling when stopped.
   useEffect(() => {
@@ -106,9 +200,19 @@ export default function CurtainControl({
   }, [status?.status, loadStatus]);
 
   const moveTo = async (nextPosition: number) => {
-    setBusy(true);
+    if (submit) {
+      setSliderValue(nextPosition);
+      submit("curtain_position", {
+        device_id: "curtain-1",
+        position: nextPosition,
+        duration_seconds: 3,
+      });
+      setMessage(`已提交窗簾移動至 ${nextPosition}%（等待控制服務處理）`);
+      return;
+    }
+    setLocalBusy(true);
     try {
-      const result = await apiRequest<CurtainStatus>("/position", "POST", {
+      const result = await apiRequest<CurtainState>("/position", "POST", {
         position: nextPosition,
         duration_seconds: 3,
       });
@@ -118,14 +222,20 @@ export default function CurtainControl({
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "控制失敗");
     } finally {
-      setBusy(false);
+      setLocalBusy(false);
     }
   };
 
   const stopCurtain = async () => {
-    setBusy(true);
+    if (submit) {
+      editingSlider.current = false;
+      submit("curtain_stop", { device_id: "curtain-1" });
+      setMessage("已提交停止窗簾指令（等待控制服務處理）");
+      return;
+    }
+    setLocalBusy(true);
     try {
-      const result = await apiRequest<CurtainStatus>("/stop", "POST");
+      const result = await apiRequest<CurtainState>("/stop", "POST");
       setStatus(result);
       setSliderValue(result.position);
       editingSlider.current = false;
@@ -133,15 +243,21 @@ export default function CurtainControl({
     } catch {
       setMessage("停止指令失敗");
     } finally {
-      setBusy(false);
+      setLocalBusy(false);
     }
   };
 
   const selectScene = async (scene: "open" | "half" | "close") => {
     const names = { open: "全開", half: "半開", close: "全關" };
-    setBusy(true);
+    if (submit) {
+      editingSlider.current = false;
+      submit("curtain_scene", { device_id: "curtain-1", scene });
+      setMessage(`已提交場景：${names[scene]}（等待控制服務處理）`);
+      return;
+    }
+    setLocalBusy(true);
     try {
-      const result = await apiRequest<CurtainStatus>("/scene", "POST", { scene });
+      const result = await apiRequest<CurtainState>("/scene", "POST", { scene });
       setStatus(result);
       editingSlider.current = false;
       setSliderValue(result.target);
@@ -149,33 +265,45 @@ export default function CurtainControl({
     } catch {
       setMessage("場景執行失敗");
     } finally {
-      setBusy(false);
+      setLocalBusy(false);
     }
   };
 
   const executeCommand = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!command.trim()) return;
+    const trimmed = command.trim();
+    if (!trimmed) return;
 
-    setBusy(true);
+    setLocalBusy(true);
+    setMessage("正在送交 Main Agent 處理窗簾指令…");
     try {
-      const result = await apiRequest<CurtainStatus>("/command", "POST", {
-        command: command.trim(),
+      const reply = await runViaMainAgent(trimmed, (progressText) => {
+        setMessage(progressText);
       });
-      setStatus(result);
-      editingSlider.current = false;
-      setSliderValue(result.target);
-      setMessage(`指令執行成功：${command.trim()}`);
+      setMessage(reply);
       setCommand("");
+      editingSlider.current = false;
+      await Promise.all([loadStatus(), loadSchedules()]);
+      onRefresh?.();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "指令執行失敗");
     } finally {
-      setBusy(false);
+      setLocalBusy(false);
     }
   };
 
   const addSchedule = async () => {
-    setBusy(true);
+    if (submit) {
+      submit("curtain_schedule_create", {
+        device_id: "curtain-1",
+        time: scheduleTime,
+        position: schedulePosition,
+        enabled: true,
+      });
+      setMessage(`已提交新增排程：${scheduleTime} → ${schedulePosition}%`);
+      return;
+    }
+    setLocalBusy(true);
     try {
       await apiRequest<CurtainSchedule>("/schedules", "POST", {
         time: scheduleTime,
@@ -187,22 +315,39 @@ export default function CurtainControl({
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "新增排程失敗");
     } finally {
-      setBusy(false);
+      setLocalBusy(false);
     }
   };
 
-  const toggleSchedule = async (id: string) => {
+  const toggleSchedule = async (item: CurtainSchedule) => {
+    if (submit) {
+      submit("curtain_schedule_toggle", {
+        device_id: "curtain-1",
+        schedule_id: item.id,
+        enabled: !item.enabled,
+      });
+      setMessage(`已提交${item.enabled ? "停用" : "啟用"}排程：${item.time}`);
+      return;
+    }
     try {
-      await apiRequest<CurtainSchedule>(`/schedules/${id}/toggle`, "POST");
+      await apiRequest<CurtainSchedule>(`/schedules/${item.id}/toggle`, "POST");
       await loadSchedules();
     } catch {
       setMessage("排程狀態修改失敗");
     }
   };
 
-  const deleteSchedule = async (id: string) => {
+  const deleteSchedule = async (item: CurtainSchedule) => {
+    if (submit) {
+      submit("curtain_schedule_delete", {
+        device_id: "curtain-1",
+        schedule_id: item.id,
+      });
+      setMessage(`已提交刪除排程：${item.time}`);
+      return;
+    }
     try {
-      await apiRequest(`/schedules/${id}`, "DELETE");
+      await apiRequest(`/schedules/${item.id}`, "DELETE");
       await loadSchedules();
       setMessage("排程已刪除");
     } catch {
@@ -223,7 +368,7 @@ export default function CurtainControl({
         </div>
         <div className="curtain-device-info">
           <strong>智慧窗簾</strong>
-          <span>CURTAIN AGENT · VIRTUAL DEVICE</span>
+          <span>CURTAIN AGENT · MAIN AGENT MANAGED</span>
         </div>
         <span className={`curtain-status-badge ${connected ? "online" : "offline"}`}>
           <span />
@@ -343,10 +488,10 @@ export default function CurtainControl({
           </div>
           <div>
             <strong>Curtain Agent</strong>
-            <span>SMART CURTAIN ASSISTANT</span>
+            <span>VIA MAIN AGENT · MCP</span>
           </div>
           <span className={`curtain-agent-online ${connected ? "" : "offline"}`}>
-            {connected ? "LOCAL" : "OFFLINE"}
+            {connected ? "MAIN AGENT" : "OFFLINE"}
           </span>
         </div>
 
@@ -359,7 +504,7 @@ export default function CurtainControl({
           <input
             value={command}
             onChange={(event) => setCommand(event.target.value)}
-            placeholder="輸入指令，例如：把窗簾打開一半"
+            placeholder="輸入指令，例如：把窗簾打開一半、停用 07:00 排程"
             aria-label="輸入窗簾中文指令"
             disabled={!connected || busy}
           />
@@ -369,7 +514,7 @@ export default function CurtainControl({
         </form>
 
         <div className="curtain-quick-commands">
-          {["全開", "半開", "全關", "停止"].map((item) => (
+          {["全開", "半開", "全關", "停止", "停用 07:00 排程", "刪除 07:00 排程"].map((item) => (
             <button
               type="button"
               key={item}
@@ -381,7 +526,7 @@ export default function CurtainControl({
           ))}
         </div>
         <p className="curtain-agent-note">
-          支援中文窗簾指令；執行結果以本機設備服務回報為準。
+          經由 Main Agent 委派 Curtain Agent（MCP）執行，所有操作與排程異動皆記錄於系統診斷日誌。
         </p>
       </section>
 
@@ -391,7 +536,7 @@ export default function CurtainControl({
             <Clock3 size={18} />
           </div>
           <div>
-            <span className="curtain-eyebrow">AUTOMATION</span>
+            <span className="curtain-eyebrow">AUTOMATION · LOGICAL CLOCK</span>
             <h3>自動排程設定</h3>
           </div>
         </div>
@@ -436,8 +581,8 @@ export default function CurtainControl({
                   <input
                     type="checkbox"
                     checked={item.enabled}
-                    onChange={() => void toggleSchedule(item.id)}
-                    disabled={!connected}
+                    onChange={() => void toggleSchedule(item)}
+                    disabled={!connected || busy}
                   />
                   <span>{item.time}</span>
                   <span className="curtain-schedule-arrow">→</span>
@@ -446,8 +591,8 @@ export default function CurtainControl({
                 <button
                   type="button"
                   className="curtain-delete-button"
-                  onClick={() => void deleteSchedule(item.id)}
-                  disabled={!connected}
+                  onClick={() => void deleteSchedule(item)}
+                  disabled={!connected || busy}
                 >
                   刪除
                 </button>

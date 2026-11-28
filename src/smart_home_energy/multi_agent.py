@@ -205,7 +205,7 @@ async def device_session(repo, event, task, budget, parent_id):
 
 
 _AC_DEVICE_RE = re.compile(r"冷氣|空調|空调|air\s*conditioner|\bac\b", re.I)
-_AC_OTHER_DEVICE_RE = re.compile(r"洗衣機|洗衣|燈泡|照明|燈|電視|窗簾|washer|bulb|light|tv|curtain", re.I)
+_AC_OTHER_DEVICE_RE = re.compile(r"洗衣機|洗衣|燈泡|照明|燈|電視|电视|窗簾|窗帘|音量|靜音|hdmi|washer|bulb|light|\btv\b|curtain|blinds", re.I)
 _TV_DEVICE_RE = re.compile(r"電視|电视|\btv\b|hdmi|音量|靜音", re.I)
 _CURTAIN_DEVICE_RE = re.compile(r"窗簾|窗帘|curtain|blinds", re.I)
 _ENERGY_DEVICE_RE = re.compile(r"冷氣|空調|洗衣機|洗衣|燈泡|照明|燈|air\s*conditioner|\bac\b|washer|bulb|light", re.I)
@@ -554,51 +554,6 @@ def run_tv_agent(repo, event, parent_id, root_id, text: str, monotonic=time.mono
     return result
 
 
-def run_curtain_agent(repo, event, parent_id, root_id, text: str, monotonic=time.monotonic, progress=None):
-    """Execute a curtain command via Curtain Agent and log durable diagnostics."""
-    from smart_home_energy import curtain
-    started = monotonic()
-    run_id = uuid4().hex
-    provider = "deterministic-curtain-agent"
-    status = "failed"
-    message = "窗簾指令未完成"
-    identifier = sha256(f"{root_id}:curtain-1".encode()).hexdigest()
-
-    if progress:
-        progress("Curtain Agent 正在執行客廳窗簾控制指令")
-    try:
-        state = curtain.execute_command(text)
-        status = "completed"
-        target = round(float(state.get("target", state.get("position", 0))))
-        if state.get("status") == "stopped" and "停" in text:
-            message = f"客廳窗簾已停止移動，目前位置 {round(float(state.get('position', 0)))}%。"
-        elif any(word in text for word in ("排程", "定時", "每天", "預約")):
-            message = f"已為客廳窗簾設定自動排程（目標位置 {target}%）。"
-        else:
-            label = "全開 (100%)" if target >= 99 else "全關 (0%)" if target <= 1 else f"開啟 {target}%"
-            message = f"客廳窗簾已執行指令：移動至 {label}。"
-        repo.log_tool(run_id, {
-            "protocol": "MCP", "mcp_method": "tools/call",
-            "role": "Curtain Agent", "provider": provider, "device_id": "curtain-1",
-            "action": {"tool": "control_curtain", "arguments": {"command": text}, "summary": "執行窗簾開合或排程控制"},
-            "result": state,
-        })
-    except ValueError as error:
-        message = str(error)
-        status = "needs_details"
-        repo.log_tool(run_id, {"role": "Curtain Agent", "provider": provider, "device_id": "curtain-1", "error": message})
-
-    run = AgentRun(run_id, event.event_id, status, provider, 0, monotonic() - started, message, parent_id, "curtain-1", "Curtain Agent")
-    repo.record_run(run)
-    result = encode(run)
-    with repo.transaction() as db:
-        db.execute(
-            "INSERT OR REPLACE INTO delegations VALUES (?,?,?,?,?)",
-            (identifier, root_id, "curtain-1", None, json.dumps({"request_id": identifier, "result": result})),
-        )
-    return result
-
-
 async def run_household(repo, event, hems, providers=None, monotonic=time.monotonic, progress=None):
     run_id, started = uuid4().hex, monotonic()
     results, status, message = [], "failed", "家庭工作未完成，請使用各設備表單"
@@ -660,7 +615,7 @@ async def run_household(repo, event, hems, providers=None, monotonic=time.monoto
 工具 {"tool":"get_home_state","arguments":{},"summary":"摘要"}。
 可用 get_agent_roles={} 查詢角色權責。
 批次委派 {"tool":"delegate_tasks","arguments":{"requests":[{"device_id":"washer-1、ac-1、bulb-1、tv-1 或 curtain-1","text":"完整原始需求中與該設備相關的條件","task_id":"僅修改冷氣或洗衣現有任務時填入","expected_version":1}]},"summary":"摘要"}。
-同一需求可委派一至五台不同設備，各自失敗；冷氣（ac-1）與洗衣（washer-1）由子 Agent 提出計畫並各自等待核准；照明（bulb-1）由 Light Agent 排入控制佇列並等待回報；電視（tv-1，含開關機、音量、靜音、HDMI1~4、播放/暫停/看電影情境）委派給 TV Agent 執行；窗簾（curtain-1，含開合百分比、遮光/透光/太陽刺眼情境、停止與每日定時排程）委派給 Curtain Agent 執行。
+同一需求可委派一至五台不同設備，各自失敗；冷氣（ac-1）與洗衣（washer-1）由子 Agent 提出計畫並各自等待核准；照明（bulb-1）由 Light Agent 排入控制佇列並等待回報；電視（tv-1，含開關機、音量、靜音、HDMI1~4、播放/暫停/看電影情境）委派給 TV Agent 執行；窗簾（curtain-1，含開合百分比、遮光/透光/太陽刺眼情境、停止，以及每日定時排程的新增、刪除與啟用/停用）委派給 Curtain Agent 執行。
 使用者已同意預設：開冷氣27°C、一小時、確認後開始；洗衣24小時內完成、避開23:00–07:00並選較便宜時段。不因未填時間而補問，將完整需求交給子 Agent 套用偏好。
 這些數字是初始偏好，以 get_home_state 的 preferences 為準。委派 text 保留使用者原文及明確條件，不把未說出的初始數字當成使用者指定值。
 若設備已有待補充、待核准或未啟動任務，修改同設備必須傳 task_id 與 expected_version，不新增第二個任務；未提及的設備保持原樣。缺正式費率基準等必要資訊才補問，向使用者說明需要哪個月份、多少度，不要求填JSON。

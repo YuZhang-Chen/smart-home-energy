@@ -20,7 +20,7 @@ from smart_home_energy.repository import AgentRun
 
 
 _OTHER_DEVICE_RE = re.compile(
-    r"冷氣|空調|洗衣機|洗衣|air\s*conditioner|washer", re.I
+    r"冷氣|空調|空调|洗衣機|洗衣|電視|电视|窗簾|窗帘|air\s*conditioner|washer|\btv\b|hdmi|curtain|blinds", re.I
 )
 
 _RELATIVE_BRIGHTNESS_RE = re.compile(
@@ -360,17 +360,17 @@ class LightTools:
         if not _LIGHT_RE.search(text):
             raise ValueError("原始需求沒有授權操作燈泡")
 
-        # Power validation
+        # Power validation (do not match across clause punctuation such as "把電視關掉，再開燈")
         turn_off = bool(
             re.search(
-                r"關燈|關掉.*燈|燈.*關掉|燈.*關閉|關閉.*燈",
+                r"關燈|關掉[^，。；、！？,\n]{0,6}燈|燈[^，。；、！？,\n]{0,6}關掉|燈[^，。；、！？,\n]{0,6}關閉|關閉[^，。；、！？,\n]{0,6}燈",
                 text,
             )
         )
 
         turn_on = bool(
             re.search(
-                r"開燈|打開.*燈|燈.*打開|燈.*開啟|開啟.*燈",
+                r"開燈|打開[^，。；、！？,\n]{0,6}燈|燈[^，。；、！？,\n]{0,6}打開|燈[^，。；、！？,\n]{0,6}開啟|開啟[^，。；、！？,\n]{0,6}燈",
                 text,
             )
         )
