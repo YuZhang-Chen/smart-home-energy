@@ -74,6 +74,24 @@ def agui_event(payload: dict, thread_id: str, run_id: str):
             ToolCallEndEvent(type=EventType.TOOL_CALL_END, tool_call_id=tool_id),
             ToolCallResultEvent(type=EventType.TOOL_CALL_RESULT, message_id=f"tool:{tool_id}", tool_call_id=tool_id, content="燈泡動作狀態以設備回報為準。", role="tool"),
         ]
+    if kind == "tv_card":
+        tool_id = payload["tool_call_id"]
+        args = json.dumps({"device_id": payload.get("device_id", "tv-1"), "summary": payload.get("summary", "")}, separators=(",", ":"))
+        return [
+            ToolCallStartEvent(type=EventType.TOOL_CALL_START, tool_call_id=tool_id, tool_call_name="render_tv_card", parent_message_id=f"assistant:{run_id}"),
+            ToolCallArgsEvent(type=EventType.TOOL_CALL_ARGS, tool_call_id=tool_id, delta=args),
+            ToolCallEndEvent(type=EventType.TOOL_CALL_END, tool_call_id=tool_id),
+            ToolCallResultEvent(type=EventType.TOOL_CALL_RESULT, message_id=f"tool:{tool_id}", tool_call_id=tool_id, content="電視動作狀態以設備回報為準。", role="tool"),
+        ]
+    if kind == "curtain_card":
+        tool_id = payload["tool_call_id"]
+        args = json.dumps({"device_id": payload.get("device_id", "curtain-1"), "summary": payload.get("summary", "")}, separators=(",", ":"))
+        return [
+            ToolCallStartEvent(type=EventType.TOOL_CALL_START, tool_call_id=tool_id, tool_call_name="render_curtain_card", parent_message_id=f"assistant:{run_id}"),
+            ToolCallArgsEvent(type=EventType.TOOL_CALL_ARGS, tool_call_id=tool_id, delta=args),
+            ToolCallEndEvent(type=EventType.TOOL_CALL_END, tool_call_id=tool_id),
+            ToolCallResultEvent(type=EventType.TOOL_CALL_RESULT, message_id=f"tool:{tool_id}", tool_call_id=tool_id, content="窗簾狀態與排程以設備回報為準。", role="tool"),
+        ]
     if kind == "done":
         return RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=thread_id, run_id=run_id)
     return CustomEvent(type=EventType.CUSTOM, name="assistant_event", value=payload)

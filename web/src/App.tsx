@@ -137,6 +137,26 @@ export default function App() {
     parameters: z.object({ request_id: z.string() }),
     render: ({ parameters }) => parameters.request_id ? <LightActionCard requestId={parameters.request_id} /> : null,
   }, []);
+  useRenderTool({
+    name: "render_tv_card",
+    parameters: z.object({ device_id: z.string().optional(), summary: z.string().optional() }),
+    render: ({ parameters }) => (
+      <TVActionCard
+        summary={parameters.summary}
+        home={renderContext.current.home}
+      />
+    ),
+  }, []);
+  useRenderTool({
+    name: "render_curtain_card",
+    parameters: z.object({ device_id: z.string().optional(), summary: z.string().optional() }),
+    render: ({ parameters }) => (
+      <CurtainActionCard
+        summary={parameters.summary}
+        home={renderContext.current.home}
+      />
+    ),
+  }, []);
   useEffect(() => {
     if (!drawerOpen) return;
     const previous = opener.current ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
@@ -440,6 +460,55 @@ export function LightActionCard({ requestId }: { requestId: string }) {
     {target && <p>{[target.power === undefined ? null : target.power ? "開啟" : "關閉", target.brightness_percent === undefined ? null : `亮度 ${target.brightness_percent}%`, target.kelvin === undefined ? null : `色溫 ${target.kelvin}K`].filter(Boolean).join(" · ")}</p>}
     {data?.result && <p>{data.result}</p>}
   </div>;
+}
+
+export function TVActionCard({
+  summary,
+  home,
+}: {
+  summary?: string;
+  home: Home | null;
+}) {
+  const tv = home?.devices["tv-1"]?.state ?? null;
+  const power = tv?.power ?? false;
+  const muted = tv?.muted ?? false;
+  const playLabel = tv?.playback === "playing" ? "播放中" : tv?.playback === "paused" ? "已暫停" : "已停止";
+  return (
+    <div className="proposal-card" aria-live="polite">
+      <strong>客廳電視</strong>
+      <p>
+        {tv
+          ? power
+            ? `運作中 · ${tv.input} · ${muted ? "靜音" : `音量 ${tv.volume}%`} · ${playLabel}`
+            : "待機中"
+          : "已套用設定"}
+      </p>
+      {summary && <p>{summary}</p>}
+    </div>
+  );
+}
+
+export function CurtainActionCard({
+  summary,
+  home,
+}: {
+  summary?: string;
+  home: Home | null;
+}) {
+  const snap = home?.devices["curtain-1"];
+  const curtain = snap?.state ?? null;
+  const schedulesCount = snap?.schedules?.filter((s) => s.enabled).length ?? 0;
+  return (
+    <div className="proposal-card" aria-live="polite">
+      <strong>客廳窗簾</strong>
+      <p>
+        {curtain
+          ? `目前 ${Math.round(curtain.position)}%（目標 ${Math.round(curtain.target)}%）${schedulesCount > 0 ? ` · 啟用排程 ${schedulesCount} 筆` : ""}`
+          : "已套用設定"}
+      </p>
+      {summary && <p>{summary}</p>}
+    </div>
+  );
 }
 
 export function ProposalCard({ taskId, version, home, submit, busy }: { taskId?: string; version?: number; home: Home | null; submit: (kind: string, payload: Record<string, unknown>) => void; busy: boolean }) {

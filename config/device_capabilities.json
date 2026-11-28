@@ -30,7 +30,7 @@
     "cannot": ["control_other_device", "approve_task", "delegate"]
   },
   "Controller": {
-    "devices": ["washer-1", "ac-1", "bulb-1", "curtain-1"],
+    "devices": ["washer-1", "ac-1", "bulb-1", "curtain-1", "tv-1"],
     "can": ["validate_authorization", "dispatch_command", "confirm_feedback"],
     "cannot": ["infer_user_intent"]
   }

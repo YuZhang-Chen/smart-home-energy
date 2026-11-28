@@ -291,12 +291,33 @@ class CurtainScheduleDeleteRequest(RequestInput):
     payload: CurtainScheduleDeletePayload
 
 
+class TVControlPayload(Input):
+    device_id: Literal["tv-1"] = "tv-1"
+    power: bool | None = Field(default=None, strict=True)
+    volume: int | None = Field(default=None, ge=0, le=100, strict=True)
+    muted: bool | None = Field(default=None, strict=True)
+    input: Literal["HDMI1", "HDMI2", "HDMI3", "HDMI4"] | None = None
+    playback: Literal["playing", "paused", "stopped"] | None = None
+
+    @model_validator(mode="after")
+    def target_present(self):
+        if all(val is None for val in (self.power, self.volume, self.muted, self.input, self.playback)):
+            raise ValueError("請至少指定一項電視控制參數")
+        return self
+
+
+class TVControlRequest(RequestInput):
+    kind: Literal["tv_control"]
+    payload: TVControlPayload
+
+
 WebRequest = Annotated[
     ACRequest | WasherRequest | ApprovalRequest | TaskRequest | DetailsRequest | ConfirmedRequest
     | BulbRequest | PreferencesRequest | TariffRequest | ClockRequest | RefreshTariffRequest
     | LightingRuleRequest | LightingResumeRequest
     | CurtainPositionRequest | CurtainStopRequest | CurtainSceneRequest
-    | CurtainScheduleCreateRequest | CurtainScheduleToggleRequest | CurtainScheduleDeleteRequest,
+    | CurtainScheduleCreateRequest | CurtainScheduleToggleRequest | CurtainScheduleDeleteRequest
+    | TVControlRequest,
     Body(discriminator="kind"),
 ]
 
@@ -335,7 +356,7 @@ def create_app(repo: Repository | None = None, hems: HemsSettings | None = None,
                 "schedules": curtain.list_schedules_data(repo),
             }
             devices["tv-1"] = {
-                "state": tv.get_status(),
+                "state": tv.get_status(repo=repo),
                 "fresh": True,
                 "active_task": None,
                 "latest_task": None,
@@ -517,9 +538,9 @@ def create_app(repo: Repository | None = None, hems: HemsSettings | None = None,
         return result
 
     from smart_home_energy.curtain import create_curtain_router
-    from smart_home_energy.tv import router as tv_router
+    from smart_home_energy.tv import create_tv_router
     app.include_router(create_curtain_router(repo))
-    app.include_router(tv_router)
+    app.include_router(create_tv_router(repo))
     app.include_router(create_mcp_router(repo, hems, mcp_server))
 
     @app.get("/api/{unknown:path}", include_in_schema=False)

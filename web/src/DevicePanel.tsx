@@ -557,7 +557,7 @@ export default function DevicePanel({
       <div className="panel-topline">
         <span className="eyebrow">DEVICE DETAILS</span>
         <span className="panel-number">
-          {live || device.id === "bulb-1"
+          {live || device.id === "bulb-1" || device.id === "curtain-1" || device.id === "tv-1"
             ? "已串接虛擬設備"
             : device.source === "local"
               ? "本頁互動"
@@ -771,6 +771,8 @@ export default function DevicePanel({
     power={tvPower}
     onPowerChange={onTVPowerChange}
     tvState={home?.devices["tv-1"]?.state ?? null}
+    submit={submit}
+    busy={busy}
     onRefresh={onRefresh}
   />
 ) : device.id === "curtain-1" ? (

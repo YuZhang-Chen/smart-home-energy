@@ -8,9 +8,10 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import App, { LightActionCard, ProposalCard } from "./App";
+import App, { CurtainActionCard, LightActionCard, ProposalCard, TVActionCard } from "./App";
 import { DiagnosticsView, SettingsView } from "./SystemViews";
 import CurtainControl from "./CurtainControl";
+import TVControl from "./TVControl";
 import { useCommands } from "./api";
 import DevicePanel, { PlanForm } from "./DevicePanel";
 import {
@@ -677,5 +678,120 @@ describe("CurtainControl Main Agent & durable request queue integration", () => 
 
     view.unmount();
     fetchMock.mockRestore();
+  });
+});
+
+describe("TVControl Main Agent & durable request queue integration", () => {
+  it("submits manual TV controls through durable requests and routes natural language via /api/assistant/ag-ui", async () => {
+    const user = userEvent.setup();
+    const submit = vi.fn();
+    const onPowerChange = vi.fn();
+    const onRefresh = vi.fn();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.endsWith("/api/assistant/ag-ui")) {
+        const sse = [
+          `data: ${JSON.stringify({ type: "CUSTOM", name: "assistant_progress", value: { text: "Main Agent 正在委派 TV Agent" } })}\n\n`,
+          `data: ${JSON.stringify({ type: "TEXT_MESSAGE_CONTENT", delta: "客廳電視已執行：切換至 HDMI2、音量調整至 30%。" })}\n\n`,
+        ].join("");
+        return new Response(sse, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+      }
+      return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+
+    const view = render(
+      <TVControl
+        power={true}
+        onPowerChange={onPowerChange}
+        tvState={{
+          device_id: "tv-1",
+          power: true,
+          volume: 25,
+          muted: false,
+          input: "HDMI1",
+          playback: "stopped",
+          updated_at: stamp,
+        }}
+        submit={submit}
+        busy={false}
+        onRefresh={onRefresh}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "切換靜音" }));
+    expect(submit).toHaveBeenCalledWith("tv_control", { device_id: "tv-1", muted: true });
+
+    await user.click(screen.getByRole("button", { name: "HDMI2" }));
+    expect(submit).toHaveBeenCalledWith("tv_control", { device_id: "tv-1", input: "HDMI2" });
+
+    await user.click(screen.getByRole("button", { name: "播放" }));
+    expect(submit).toHaveBeenCalledWith("tv_control", { device_id: "tv-1", playback: "playing" });
+
+    const inputEl = screen.getByLabelText("輸入電視指令");
+    await user.type(inputEl, "太吵了音量調到 30");
+    await user.click(screen.getByRole("button", { name: "送出指令" }));
+
+    expect((await screen.findAllByText("客廳電視已執行：切換至 HDMI2、音量調整至 30%。")).length).toBeGreaterThan(0);
+    expect(onRefresh).toHaveBeenCalled();
+
+    const aguiCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/api/assistant/ag-ui"));
+    expect(aguiCall).toBeDefined();
+    const body = JSON.parse(String((aguiCall?.[1] as RequestInit)?.body ?? "{}"));
+    expect(body.threadId).toBe("home");
+    expect(body.messages[0].content).toContain("客廳電視");
+
+    view.unmount();
+    fetchMock.mockRestore();
+  });
+
+  it("renders TVActionCard and CurtainActionCard as clean status receipt cards without redundant buttons", () => {
+    const home = {
+      ...fixture(),
+      devices: {
+        ...fixture().devices,
+        "tv-1": {
+          state: {
+            device_id: "tv-1" as const,
+            power: true,
+            volume: 35,
+            muted: false,
+            input: "HDMI2" as const,
+            playback: "playing" as const,
+            updated_at: stamp,
+          },
+          fresh: true,
+          active_task: null,
+          latest_task: null,
+        },
+        "curtain-1": {
+          state: {
+            device_id: "curtain-1" as const,
+            position: 50,
+            target: 50,
+            status: "stopped" as const,
+            updated_at: stamp,
+          },
+          fresh: true,
+          active_task: null,
+          latest_task: null,
+          schedules: [{ id: "s1", time: "07:00", position: 100, enabled: true }],
+        },
+      },
+    };
+
+    const view = render(
+      <>
+        <TVActionCard summary="已切換至 HDMI2" home={home} />
+        <CurtainActionCard summary="已拉開至 50%" home={home} />
+      </>,
+    );
+
+    expect(screen.getByText(/運作中 · HDMI2 · 音量 35% · 播放中/)).toBeInTheDocument();
+    expect(screen.getByText("已切換至 HDMI2")).toBeInTheDocument();
+    expect(screen.getByText(/目前 50%（目標 50%） · 啟用排程 1 筆/)).toBeInTheDocument();
+    expect(screen.getByText("已拉開至 50%")).toBeInTheDocument();
+    expect(screen.queryAllByRole("button")).toHaveLength(0);
+
+    view.unmount();
   });
 });

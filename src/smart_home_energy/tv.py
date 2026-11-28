@@ -1,22 +1,68 @@
-"""Virtual TV control API and natural-language command parser."""
+"""Virtual TV control API, SQLite operation logging, and natural-language command parser."""
 
+from dataclasses import dataclass
 from datetime import datetime
 import inspect
 import json
 from pathlib import Path
 import re
 from threading import RLock
-from typing import Literal
+from typing import Any, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
+
+from smart_home_energy.domain import TAIPEI, aware, utcnow
 
 lock = RLock()
 DATA_FILE = Path(__file__).resolve().parents[2] / "artifacts" / "runtime" / "tv_state.json"
 
 InputSource = Literal["HDMI1", "HDMI2", "HDMI3", "HDMI4"]
 PlaybackState = Literal["playing", "paused", "stopped"]
+
+
+@dataclass(frozen=True)
+class TVDeviceState:
+    device_id: str
+    power: bool
+    volume: int
+    muted: bool
+    input: str
+    playback: str
+    updated_at: str
+    observed_at: datetime
+    logical_at: datetime
+
+
+@dataclass(frozen=True)
+class TVCommand:
+    command_id: str
+    device_id: str
+    action: str
+    power: bool | None
+    volume: int | None
+    muted: bool | None
+    input: str | None
+    playback: str | None
+    source: str
+    authorization_ref: str
+    logical_at: datetime
+
+
+@dataclass(frozen=True)
+class TVCommandResult:
+    command_id: str
+    device_id: str
+    accepted: bool
+    message: str
+    power: bool
+    volume: int
+    muted: bool
+    input: str
+    playback: str
+    observed_at: datetime
+
 
 state: dict[str, object] = {
     "device_id": "tv-1",
@@ -29,17 +75,134 @@ state: dict[str, object] = {
 }
 
 
-def _load_state_unlocked() -> None:
-    if not DATA_FILE.exists():
+def _logical_now(repo: Any, real: datetime | None = None) -> datetime:
+    now_real = aware(real or utcnow())
+    if repo is not None:
+        return repo.clock().now(now_real).astimezone(TAIPEI)
+    return now_real.astimezone(TAIPEI)
+
+
+def _sync_device_to_repo(repo: Any, real: datetime | None = None) -> None:
+    if repo is None:
         return
-    try:
-        raw = json.loads(DATA_FILE.read_text(encoding="utf-8"))
-        if isinstance(raw, dict):
-            for key in ("power", "volume", "muted", "input", "playback", "updated_at"):
-                if key in raw:
-                    state[key] = raw[key]
-    except (OSError, ValueError, TypeError):
-        pass
+    now_real = aware(real or utcnow())
+    logical = _logical_now(repo, now_real)
+    snapshot = TVDeviceState(
+        device_id="tv-1",
+        power=bool(state["power"]),
+        volume=int(state["volume"]),
+        muted=bool(state["muted"]),
+        input=str(state["input"]),
+        playback=str(state["playback"]),
+        updated_at=str(state["updated_at"]),
+        observed_at=now_real,
+        logical_at=logical,
+    )
+    repo.save_device(snapshot)
+
+
+def _record_command_and_audit(
+    repo: Any,
+    *,
+    action: str,
+    audit_kind: str,
+    source: str,
+    authorization_ref: str,
+    before: dict[str, Any],
+    after: dict[str, Any],
+    message: str,
+    power: bool | None = None,
+    volume: int | None = None,
+    muted: bool | None = None,
+    input_source: str | None = None,
+    playback: str | None = None,
+    real: datetime | None = None,
+) -> None:
+    if repo is None:
+        return
+    now_real = aware(real or utcnow())
+    logical = _logical_now(repo, now_real)
+    cmd = TVCommand(
+        command_id=uuid4().hex,
+        device_id="tv-1",
+        action=action,
+        power=power,
+        volume=volume,
+        muted=muted,
+        input=input_source,
+        playback=playback,
+        source=source,
+        authorization_ref=authorization_ref,
+        logical_at=logical,
+    )
+    repo.save_command(cmd)
+    res = TVCommandResult(
+        command_id=cmd.command_id,
+        device_id="tv-1",
+        accepted=True,
+        message=message,
+        power=bool(after["power"]),
+        volume=int(after["volume"]),
+        muted=bool(after["muted"]),
+        input=str(after["input"]),
+        playback=str(after["playback"]),
+        observed_at=now_real,
+    )
+    repo.command_result(res)
+    audit_payload = {
+        "device_id": "tv-1",
+        "command_id": cmd.command_id,
+        "action": action,
+        "source": source,
+        "authorization_ref": authorization_ref,
+        "logical_at": logical.isoformat(),
+        "before": {
+            "power": bool(before["power"]),
+            "volume": int(before["volume"]),
+            "muted": bool(before["muted"]),
+            "input": str(before["input"]),
+            "playback": str(before["playback"]),
+        },
+        "after": {
+            "power": bool(after["power"]),
+            "volume": int(after["volume"]),
+            "muted": bool(after["muted"]),
+            "input": str(after["input"]),
+            "playback": str(after["playback"]),
+        },
+        "message": message,
+    }
+    repo.audit(audit_kind, audit_payload)
+
+
+def _load_state_unlocked(repo: Any = None) -> None:
+    file_raw: dict[str, Any] | None = None
+    if DATA_FILE.exists():
+        try:
+            parsed = json.loads(DATA_FILE.read_text(encoding="utf-8"))
+            if isinstance(parsed, dict):
+                file_raw = parsed
+        except (OSError, ValueError, TypeError):
+            file_raw = None
+
+    repo_raw: dict[str, Any] | None = None
+    if repo is not None:
+        try:
+            saved = repo.device("tv-1")
+            if isinstance(saved, dict):
+                repo_raw = saved
+        except Exception:
+            repo_raw = None
+
+    chosen = file_raw
+    if repo_raw is not None:
+        if file_raw is None or str(repo_raw.get("updated_at", "")) >= str(file_raw.get("updated_at", "")):
+            chosen = repo_raw
+
+    if chosen is not None:
+        for key in ("power", "volume", "muted", "input", "playback", "updated_at"):
+            if key in chosen:
+                state[key] = chosen[key]
 
 
 def _save_state_unlocked() -> None:
@@ -52,9 +215,11 @@ def _save_state_unlocked() -> None:
         pass
 
 
-def get_status() -> dict[str, object]:
+def get_status(repo: Any = None) -> dict[str, object]:
     with lock:
-        _load_state_unlocked()
+        _load_state_unlocked(repo=repo)
+        if repo is not None and repo.device("tv-1") is None:
+            _sync_device_to_repo(repo)
         return dict(state)
 
 
@@ -65,9 +230,16 @@ def update_tv(
     muted: bool | None = None,
     input_source: InputSource | None = None,
     playback: PlaybackState | None = None,
+    repo: Any = None,
+    source: str = "api",
+    authorization_ref: str = "direct",
+    action_name: str = "tv_control",
+    real: datetime | None = None,
+    record_log: bool = True,
 ) -> dict[str, object]:
     with lock:
-        _load_state_unlocked()
+        _load_state_unlocked(repo=repo)
+        before = dict(state)
         if power is not None:
             state["power"] = bool(power)
             if not state["power"]:
@@ -86,12 +258,40 @@ def update_tv(
             if playback not in {"playing", "paused", "stopped"}:
                 raise ValueError("播放狀態僅支援 playing、paused、stopped")
             state["playback"] = playback
-        state["updated_at"] = datetime.now().astimezone().isoformat()
+        now_real = aware(real or utcnow())
+        state["updated_at"] = now_real.astimezone(TAIPEI).isoformat()
+        after = dict(state)
         _save_state_unlocked()
-        return dict(state)
+        if repo is not None:
+            _sync_device_to_repo(repo, real=now_real)
+            if record_log:
+                _record_command_and_audit(
+                    repo,
+                    action=action_name,
+                    audit_kind="tv_control",
+                    source=source,
+                    authorization_ref=authorization_ref,
+                    before=before,
+                    after=after,
+                    message=f"電視狀態更新：power={after['power']} input={after['input']} volume={after['volume']} muted={after['muted']} playback={after['playback']}",
+                    power=power,
+                    volume=int(volume) if volume is not None else None,
+                    muted=muted,
+                    input_source=input_source,
+                    playback=playback,
+                    real=now_real,
+                )
+        return after
 
 
-def execute_command(command: str) -> dict[str, object]:
+def execute_command(
+    command: str,
+    *,
+    repo: Any = None,
+    source: str = "agent",
+    authorization_ref: str = "direct",
+    real: datetime | None = None,
+) -> dict[str, object]:
     text = command.strip()
     if not text:
         raise ValueError("請輸入電視控制指令")
@@ -99,27 +299,36 @@ def execute_command(command: str) -> dict[str, object]:
     actions: list[str] = []
 
     with lock:
+        _load_state_unlocked(repo=repo)
+        before = dict(state)
         if re.search(r"關閉電視|關掉電視|電視關機|關電視|關機|turn\s*off", normalized):
-            update_tv(power=False)
+            updated = update_tv(
+                power=False,
+                repo=repo,
+                source=source,
+                authorization_ref=authorization_ref,
+                action_name="tv_command",
+                real=real,
+            )
             return {
-                "status": get_status(),
+                "status": updated,
                 "message": "已關閉客廳電視，進入待機狀態。",
             }
 
         if re.search(r"打開電視|開啟電視|電視開機|開電視|開機|turn\s*on", normalized):
-            update_tv(power=True)
+            update_tv(power=True, repo=repo, record_log=False, real=real)
             actions.append("開啟電視")
 
         hdmi_match = re.search(r"hdmi\s*[-_#]?\s*([1-4])", normalized, re.I) or re.search(
             r"切換(?:到|至)?\s*(?:訊號源|輸入源|hdmi)?\s*([1-4])", normalized, re.I
         )
         if hdmi_match:
-            source = f"HDMI{hdmi_match.group(1)}"
+            source_name = f"HDMI{hdmi_match.group(1)}"
             if not state["power"]:
-                update_tv(power=True)
+                update_tv(power=True, repo=repo, record_log=False, real=real)
                 actions.append("開啟電視")
-            update_tv(input_source=source)  # type: ignore[arg-type]
-            actions.append(f"切換至 {source}")
+            update_tv(input_source=source_name, repo=repo, record_log=False, real=real)  # type: ignore[arg-type]
+            actions.append(f"切換至 {source_name}")
 
         # Strip out HDMI numbers before checking volume numbers.
         volume_text = re.sub(r"hdmi\s*[-_#]?\s*[1-4]", " ", normalized, flags=re.I)
@@ -130,52 +339,52 @@ def execute_command(command: str) -> dict[str, object]:
                 if not 0 <= vol <= 100:
                     raise ValueError("電視音量範圍為 0～100")
                 if not state["power"]:
-                    update_tv(power=True)
+                    update_tv(power=True, repo=repo, record_log=False, real=real)
                     actions.append("開啟電視")
-                update_tv(volume=vol, muted=False)
+                update_tv(volume=vol, muted=False, repo=repo, record_log=False, real=real)
                 actions.append(f"音量調整至 {vol}%")
             elif re.search(r"大聲一點|調大|增加音量|音量調高", volume_text):
                 if not state["power"]:
-                    update_tv(power=True)
+                    update_tv(power=True, repo=repo, record_log=False, real=real)
                     actions.append("開啟電視")
                 next_vol = min(100, int(state["volume"]) + 5)
-                update_tv(volume=next_vol, muted=False)
+                update_tv(volume=next_vol, muted=False, repo=repo, record_log=False, real=real)
                 actions.append(f"音量調高至 {next_vol}%")
             elif re.search(r"小聲一點|調小|降低音量|音量調低", volume_text):
                 if not state["power"]:
-                    update_tv(power=True)
+                    update_tv(power=True, repo=repo, record_log=False, real=real)
                     actions.append("開啟電視")
                 next_vol = max(0, int(state["volume"]) - 5)
-                update_tv(volume=next_vol, muted=False)
+                update_tv(volume=next_vol, muted=False, repo=repo, record_log=False, real=real)
                 actions.append(f"音量調低至 {next_vol}%")
 
         if re.search(r"取消靜音|解除靜音|打開聲音|開啟聲音", normalized):
-            update_tv(muted=False)
+            update_tv(muted=False, repo=repo, record_log=False, real=real)
             actions.append("解除靜音")
         elif re.search(r"靜音|閉嘴|關聲音", normalized):
-            update_tv(muted=True)
+            update_tv(muted=True, repo=repo, record_log=False, real=real)
             actions.append("開啟靜音")
 
         if re.search(r"暫停播放|暫停", normalized):
             if not state["power"]:
                 raise ValueError("請先開啟電視，再控制播放")
-            update_tv(playback="paused")
+            update_tv(playback="paused", repo=repo, record_log=False, real=real)
             actions.append("暫停播放")
         elif re.search(r"開始播放|繼續播放|播放|繼續", normalized):
             if not state["power"]:
-                update_tv(power=True)
+                update_tv(power=True, repo=repo, record_log=False, real=real)
                 actions.append("開啟電視")
-            update_tv(playback="playing")
+            update_tv(playback="playing", repo=repo, record_log=False, real=real)
             actions.append("開始播放")
         elif re.search(r"停止播放|停止", normalized):
             if not state["power"]:
                 raise ValueError("請先開啟電視，再控制播放")
-            update_tv(playback="stopped")
+            update_tv(playback="stopped", repo=repo, record_log=False, real=real)
             actions.append("停止播放")
 
         if not actions:
             if re.search(r"狀態|如何|幾度|開著嗎|有沒有開", normalized):
-                current = get_status()
+                current = get_status(repo=repo)
                 power_label = "開啟（運作中）" if current["power"] else "關閉（待機中）"
                 vol_label = "靜音" if current["muted"] else f"{current['volume']}%"
                 return {
@@ -184,9 +393,28 @@ def execute_command(command: str) -> dict[str, object]:
                 }
             raise ValueError("無法辨識電視指令，可嘗試：打開電視、音量調到 30、切換 HDMI 2、靜音")
 
+        after = get_status(repo=repo)
+        msg = "客廳電視已執行：" + "、".join(dict.fromkeys(actions)) + "。"
+        if repo is not None:
+            _record_command_and_audit(
+                repo,
+                action="tv_command",
+                audit_kind="tv_control",
+                source=source,
+                authorization_ref=authorization_ref,
+                before=before,
+                after=after,
+                message=msg,
+                power=bool(after["power"]),
+                volume=int(after["volume"]),
+                muted=bool(after["muted"]),
+                input_source=str(after["input"]),
+                playback=str(after["playback"]),
+                real=real,
+            )
         return {
-            "status": get_status(),
-            "message": "客廳電視已執行：" + "、".join(dict.fromkeys(actions)) + "。",
+            "status": after,
+            "message": msg,
         }
 
 
@@ -201,7 +429,7 @@ class TVTools:
     def get_tv_context(self) -> dict[str, object]:
         return {
             "device_id": "tv-1",
-            "state": get_status(),
+            "state": get_status(repo=self.repo),
             "supported_inputs": ["HDMI1", "HDMI2", "HDMI3", "HDMI4"],
             "supported_playback": ["playing", "paused", "stopped"],
             "volume_range": [0, 100],
@@ -234,7 +462,7 @@ class TVTools:
         if playback is not None and playback not in {"playing", "paused", "stopped"}:
             raise ValueError("播放狀態僅支援 playing、paused、stopped")
 
-        current = get_status()
+        current = get_status(repo=self.repo)
         effective_power = power
         # Automatically turn on the TV when the user requests active media/input/volume changes
         if effective_power is None and not current["power"] and (
@@ -248,6 +476,10 @@ class TVTools:
             muted=muted,
             input_source=input,
             playback=playback,
+            repo=self.repo,
+            source="agent",
+            authorization_ref=f"agent:{self.root_id}",
+            action_name="control_tv",
         )
         changes: list[str] = []
         if effective_power is True and not current["power"]:
@@ -327,7 +559,12 @@ async def tv_session(repo, event, budget, parent_id, root_id, progress=None):
         context = mcp.call_tool_value("TV Agent", "get_tv_context", {}, tool_instance=tools)
         if not budget.providers:
             # Offline / model-free unit test fallback
-            outcome = execute_command(original_text)
+            outcome = execute_command(
+                original_text,
+                repo=repo,
+                source="agent",
+                authorization_ref=f"agent:{root_id}",
+            )
             provider_name = "deterministic-tv-agent"
             status = "completed"
             message = str(outcome["message"])
@@ -392,10 +629,27 @@ async def tv_session(repo, event, budget, parent_id, root_id, progress=None):
                     messages.append({"role": "user", "content": json.dumps({"error": str(error)}, ensure_ascii=False)})
     except (ProviderUnavailable, ProviderConfigurationError) as error:
         try:
-            outcome = execute_command(original_text)
+            outcome = execute_command(
+                original_text,
+                repo=repo,
+                source="agent",
+                authorization_ref=f"agent:{root_id}",
+            )
             provider_name = "deterministic-tv-fallback"
             status = "completed"
             message = str(outcome["message"])
+            repo.log_tool(
+                run_id,
+                {
+                    "protocol": "MCP",
+                    "mcp_method": "tools/call",
+                    "role": "TV Agent",
+                    "provider": provider_name,
+                    "device_id": "tv-1",
+                    "action": {"tool": "control_tv", "arguments": {"command": original_text}, "summary": "模型不可用降級確定性電視控制"},
+                    "result": outcome["status"],
+                },
+            )
         except ValueError:
             message = str(error)
     except (ValueError, TypeError, KeyError, OverflowError) as error:
@@ -418,9 +672,6 @@ async def tv_session(repo, event, budget, parent_id, root_id, progress=None):
     return encode(run)
 
 
-router = APIRouter(prefix="/api/tv", tags=["tv"])
-
-
 class TVUpdateRequest(BaseModel):
     power: bool | None = None
     volume: int | None = Field(default=None, ge=0, le=100)
@@ -433,28 +684,42 @@ class TVCommandRequest(BaseModel):
     command: str = Field(min_length=1, max_length=200)
 
 
-@router.get("/status")
-def tv_status():
-    return get_status()
+def create_tv_router(repo: Any = None) -> APIRouter:
+    tv_router = APIRouter(prefix="/api/tv", tags=["tv"])
+
+    @tv_router.get("/status")
+    def tv_status():
+        return get_status(repo=repo)
+
+    @tv_router.post("/control")
+    def tv_control(request: TVUpdateRequest):
+        try:
+            return update_tv(
+                power=request.power,
+                volume=request.volume,
+                muted=request.muted,
+                input_source=request.input,
+                playback=request.playback,
+                repo=repo,
+                source="api_compat",
+                authorization_ref="api:/api/tv/control",
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @tv_router.post("/command")
+    def tv_command(request: TVCommandRequest):
+        try:
+            return execute_command(
+                request.command,
+                repo=repo,
+                source="api_compat",
+                authorization_ref="api:/api/tv/command",
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    return tv_router
 
 
-@router.post("/control")
-def tv_control(request: TVUpdateRequest):
-    try:
-        return update_tv(
-            power=request.power,
-            volume=request.volume,
-            muted=request.muted,
-            input_source=request.input,
-            playback=request.playback,
-        )
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
-
-
-@router.post("/command")
-def tv_command(request: TVCommandRequest):
-    try:
-        return execute_command(request.command)
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+router = create_tv_router()

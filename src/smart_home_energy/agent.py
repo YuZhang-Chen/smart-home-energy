@@ -311,6 +311,26 @@ def agent_worker(repo: Repository, hems: HemsSettings, stopped):
                             "kind": "task_card", "tool_call_id": f"plan:{task.task_id}:{task.version}",
                             "task_id": task.task_id, "version": task.version, "device_id": task.device_id,
                         })
+                    sent_cards = {row["payload"].get("kind") for row in existing}
+                    with repo.transaction() as db:
+                        run_rows = db.execute("SELECT data FROM agent_runs ORDER BY rowid DESC LIMIT 20").fetchall()
+                    for row in run_rows:
+                        info = json.loads(row["data"])
+                        if info.get("event_id") != event.event_id or info.get("status") != "completed":
+                            continue
+                        dev = info.get("device_id")
+                        if dev == "tv-1" and "tv_card" not in sent_cards:
+                            sent_cards.add("tv_card")
+                            repo.append_assistant_event(assistant_run["id"], {
+                                "kind": "tv_card", "tool_call_id": f"tv:{root_id}",
+                                "device_id": "tv-1", "summary": str(info.get("message") or "客廳電視已更新"),
+                            })
+                        elif dev == "curtain-1" and "curtain_card" not in sent_cards:
+                            sent_cards.add("curtain_card")
+                            repo.append_assistant_event(assistant_run["id"], {
+                                "kind": "curtain_card", "tool_call_id": f"curtain:{root_id}",
+                                "device_id": "curtain-1", "summary": str(info.get("message") or "客廳窗簾已更新"),
+                            })
                 repo.append_assistant_event(assistant_run["id"], {"kind": "content", "text": run.message})
                 repo.append_assistant_event(assistant_run["id"], {"kind": "message_end"})
                 repo.append_assistant_event(assistant_run["id"], {"kind": "error" if status == "failed" else "done", "text": run.message})

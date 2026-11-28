@@ -33,6 +33,7 @@ import { devices, isAnimating, type DeviceId, type Home } from "./types";
 import { calculateDayNight, displayedMinute, type DayNightState } from "./dayNight";
 import CurtainPanels from "./CurtainPanels";
 import OutdoorScene from "./OutdoorScene";
+import TVScreen from "./TVScreen";
 
 type Vec = [number, number, number];
 const wood = "#bb9065",
@@ -815,14 +816,6 @@ export default function Scene({
   const sceneLighting = calculateDayNight(displayedMinute(dayNight));
   const curtainTarget = home?.devices["curtain-1"]?.state?.target ?? home?.devices["curtain-1"]?.state?.position ?? 0;
   const tvState = home?.devices["tv-1"]?.state;
-  const tvOn = tvState?.power ?? false;
-  const tvInputColors: Record<string, { screen: string; accent: string; glow: string }> = {
-    HDMI1: { screen: "#1d3b53", accent: "#4fc3f7", glow: "#38bdf8" },
-    HDMI2: { screen: "#2d1f4e", accent: "#a78bfa", glow: "#818cf8" },
-    HDMI3: { screen: "#1b4332", accent: "#52b788", glow: "#34d399" },
-    HDMI4: { screen: "#4a2511", accent: "#fb923c", glow: "#f97316" },
-  };
-  const tvTheme = tvInputColors[tvState?.input ?? "HDMI1"] ?? tvInputColors.HDMI1;
   const [hovered, setHovered] = useState<DeviceId | null>(null);
   const label = useRef<HTMLDivElement>(null);
   const activeLabel = hovered ?? selected;
@@ -899,41 +892,7 @@ export default function Scene({
                   color="#262d2a"
                   radius={0.025}
                 />
-                {/* 電視螢幕面板：開機時自發光並隨 HDMI1~4 切換主題色，關機時為深黑待機螢幕 */}
-                <mesh position={[0, 0, 0.052]}>
-                  <boxGeometry args={[2.05, 1.1, 0.015]} />
-                  <meshStandardMaterial
-                    color={tvOn ? tvTheme.screen : "#181d1b"}
-                    emissive={tvOn ? tvTheme.screen : "#000000"}
-                    emissiveIntensity={tvOn ? (tvState?.playback === "playing" ? 1.15 : 0.75) : 0}
-                    roughness={tvOn ? 0.25 : 0.6}
-                  />
-                </mesh>
-                {tvOn ? (
-                  <>
-                    <pointLight
-                      position={[0, 0, 0.45]}
-                      color={tvTheme.glow}
-                      intensity={tvState?.playback === "playing" ? 1.1 : 0.65}
-                      distance={3.5}
-                      decay={2}
-                    />
-                    <mesh position={[0.3, 0.1, 0.065]}>
-                      <circleGeometry args={[tvState?.playback === "playing" ? 0.38 : 0.32, 32]} />
-                      <meshBasicMaterial color={tvTheme.accent} />
-                    </mesh>
-                    <mesh position={[-0.35, -0.27, 0.075]}>
-                      <boxGeometry args={[Math.max(0.2, 1.15 * ((tvState?.muted ? 0 : (tvState?.volume ?? 25)) / 100)), 0.045, 0.006]} />
-                      <meshBasicMaterial color={tvState?.muted ? "#ef4444" : "#f8fafc"} />
-                    </mesh>
-                  </>
-                ) : (
-                  /* 待機電源紅點指示燈 */
-                  <mesh position={[0.92, -0.48, 0.065]}>
-                    <circleGeometry args={[0.025, 16]} />
-                    <meshBasicMaterial color="#ef4444" />
-                  </mesh>
-                )}
+                <TVScreen tvState={tvState} />
                 <Block
                   at={[0, -0.75, 0]}
                   size={[0.1, 0.3, 0.08]}

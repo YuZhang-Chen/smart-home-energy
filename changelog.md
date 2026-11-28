@@ -2,6 +2,62 @@
 
 記錄各版本的重要變更，最新版本放最上方。格式參考 [Sample CHANGELOG](https://gist.github.com/juampynr/4c18214a8eb554084e21d6e288a18a2c)，使用版本號、日期及 Added／Changed／Fixed 分類；版本 commit 以對應的 `v{版本號}:` 開頭。既有未編版紀錄保留原標題。
 
+## [v1.6.6.2] - 2026-11-29
+
+補強智慧電視（`tv-1`）與其他設備一致的常駐 Controller／SQLite 持久化操作日誌架構，將前端 `TVControl` 手動控制接入 `/api/requests` 佇列、自然語言指令改經 Main Agent（AG-UI）委派執行，並為 `tv-1` 與 `curtain-1` 補齊與客廳燈一致的極簡聊天室狀態回執卡。與 `v1.6.6.1` 一同收錄於 commit：`v1.6.6: add 3D live YouTube TV, TVController durable logs, Main Agent TV panel, and TV/curtain status cards`。
+
+### Added
+
+- 新增常駐電視控制器 `TVController`（`src/smart_home_energy/tv_control.py`）並掛載至 `control.py` 主迴圈，統一消費 `/api/requests` 佇列中的 `tv_control` 請求並同步裝置狀態至 SQLite。
+- `tv.py` 新增 `TVDeviceState`、`TVCommand`、`TVCommandResult` 及 SQLite 操作日誌寫入（`devices`、`commands`、`audit`），並新增 `create_tv_router(repo)` 讓相容端點同步寫入稽核紀錄。
+- 補齊聊天室狀態回執卡：`agent.py` 與 `assistant_service.py` 新增 `tv_card`／`curtain_card` 持久化 AG-UI 事件（`render_tv_card`／`render_curtain_card`），前端 `App.tsx` 新增 `TVActionCard` 與 `CurtainActionCard` 純狀態回執卡（與 `LightActionCard` 風格一致，不含多餘按鈕）。
+- 新增後端專屬測試 `tests/test_tv.py`（6 項涵蓋 `TVController` 佇列、422 驗證、`tv_session` 確定性與 LLM 降級、跨設備越權與 AG-UI 卡片序列化），並於 `web/src/controls.test.tsx` 補上 `TVControl` 與 `TVActionCard`／`CurtainActionCard` 測試。
+
+### Changed
+
+- `api.py` 新增 `TVControlPayload`／`TVControlRequest`（`kind: "tv_control"`）納入 `WebRequest` 驗證模型，`/api/home` 改呼叫 `tv.get_status(repo=repo)`，並改掛 `create_tv_router(repo)`。
+- 更新 `config/device_capabilities.json` 與 `src/smart_home_energy/data/device_capabilities.json`，將 `"tv-1"` 正式納入 `Controller.devices`。
+- 前端 `TVControl.tsx` 與 `DevicePanel.tsx`：手動控制按鈕改透過 `submit("tv_control", ...)` 進入持久化請求佇列；自然語言指令框改呼叫 `POST /api/assistant/ag-ui` 經 Main Agent 委派 TV Agent（MCP）執行；`tv-1` 與 `curtain-1` 面板狀態標記更新為「已串接虛擬設備」。
+
+### Fixed
+
+- 補齊 `tv_session` 在 LLM 不可用降級（`deterministic-tv-fallback`）分支的 `tool_logs` 紀錄。
+- 清除 `multi_agent.py` 中不再使用的舊死碼函式 `run_tv_agent`。
+- 移除 `TVControl.tsx` 的錯誤靜默忽略（`.catch(() => {})`），改為明確顯示錯誤提示。
+
+### Validation
+
+- 後端 pytest：`tests/test_tv.py`（6/6）、`tests/test_assistant_service.py`（5/5）及既有核心測試（44 passed, 1 live skipped）皆通過。
+- 前端 Vitest 29 項單元與互動測試與 `npm run build` 正式建置皆通過。
+
+---
+
+## [v1.6.6.1] - 2026-11-28
+
+升級 3D 智慧客廳電視（`tv-1`）螢幕渲染為真實可播放的嵌入式 YouTube 頻道畫面（含即時新聞 24H 直播與 OSD 介面），並修復電視控制面板靜音按鈕未同步後端的問題。對應 commit：`v1.6.6.1: embed live YouTube channels on 3D TV screen and fix TV mute sync`。
+
+### Added
+
+- 新增 `web/src/TVScreen.tsx`：以 `@react-three/drei` 的 `<Html transform>` 搭配正交攝影機比例（`615 × 330px`、`distanceFactor={4 / 3}`）將 YouTube 嵌入式播放器精準貼合至 3D 電視框。
+- 內建 4 組可嵌入 YouTube 頻道供 `HDMI1`–`HDMI4` 切換：`HDMI1`（公視 13 台 Live）、`HDMI2`（即時新聞 24H Live）、`HDMI3`（4K 自然風景）、`HDMI4`（Lo-Fi 音樂頻道）。
+- 透過 YouTube IFrame `postMessage` API（`enablejsapi=1` + `origin`）即時同步 `playback`（播放／暫停）、`volume`（0–100）與 `muted` 狀態，並於螢幕疊加訊號源、暫停遮罩與底部音量條 OSD 浮層；攝影機旋轉至電視背面時自動隱藏浮層防穿幫。
+
+### Changed
+
+- 更新 `web/src/Scene.tsx`：將原本純色方塊電視畫面替換為 `<TVScreen tvState={tvState} />`，保留關機待機紅點指示燈與開機時的客廳環境柔光（`pointLight`）。
+- 更新 `web/src/style.css`：新增 `.tv-3d-*` 螢幕與 OSD 樣式，並為 `.scene-canvas` 加上 `isolation: isolate; overflow: hidden;` 確保 3D HTML 浮層不遮蓋畫布上方 UI 或左右側邊對話框。
+
+### Fixed
+
+- 修正 `web/src/TVControl.tsx` 靜音按鈕僅修改本地 React 狀態而未呼叫 `syncToBackend({ muted })` 的問題，使靜音切換能即時同步至後端與 3D YouTube 電視播放器。
+
+### Validation
+
+- 前端 Vitest 27 項單元與互動測試全數通過。
+- 前端 `npm run build`（`check:runtime && tsc -b && vite build`）型別檢查與生產建置通過。
+
+---
+
 ## [v1.6.5] - 2026-11-28
 
 為 Three.js 智慧客廳新增 Low-Poly 溫馨庭園微縮底座場景與左側落地窗透視效果，整合日夜自動點亮庭園燈與輕微環境動態，並重構左右側邊對話框為 75% / 25% 平滑並排佈局以徹底解決渲染畫布被擠壓與鏡頭跳動問題。對應 commit：`v1.6.5: add 3D outdoor garden diorama, transparent window view, and 75/25 anti-squeeze sidebar layout`。

@@ -297,6 +297,7 @@ def main():
         from smart_home_energy.bulb_control import BulbController
         from smart_home_energy.curtain_control import CurtainController
         from smart_home_energy.lighting_runner import LightingRuleRunner
+        from smart_home_energy.tv_control import TVController
         mode = os.getenv("HEMS_TRANSPORT", "mqtt")
         if mode not in {"mqtt", "matter"}:
             raise ValueError("HEMS_TRANSPORT 只支援 mqtt 或 matter")
@@ -308,7 +309,7 @@ def main():
             transports = [WasherTransport(settings, hems.mqtt_root, "control", device) for device in ("washer-1", "ac-1", "bulb-1")]
         controllers = [Controller(repo, transports[0], hems), ACController(repo, transports[1], hems),
                        LightingRuleRunner(repo), BulbController(repo, transports[2]),
-                       CurtainController(repo)]
+                       CurtainController(repo), TVController(repo)]
         stopped = threading.Event()
         worker = threading.Thread(target=agent_worker, args=(repo, hems, stopped), daemon=True, name="main-agent")
         for transport in transports:

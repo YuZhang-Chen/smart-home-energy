@@ -1,4 +1,3 @@
-
 import { useEffect, useState, type FormEvent } from "react";
 import {
   Tv,
@@ -14,23 +13,114 @@ import {
   CheckCircle2,
 } from "lucide-react";
 
-
 import type { TVState } from "./types";
 
 type InputSource = "HDMI1" | "HDMI2" | "HDMI3" | "HDMI4";
 type Playback = "playing" | "paused" | "stopped";
+type SubmitFn = (kind: string, payload: Record<string, unknown>) => void;
 
 interface TVControlProps {
   power: boolean;
   onPowerChange: (power: boolean) => void;
   tvState?: TVState | null;
+  submit?: SubmitFn;
+  busy?: boolean;
   onRefresh?: () => void;
+}
+
+async function runViaMainAgent(
+  text: string,
+  onProgress: (msg: string) => void,
+): Promise<string> {
+  const runId = `tv-${crypto.randomUUID()}`;
+  const messageId = `msg-${runId}`;
+  const content = /電視|tv|hdmi/i.test(text) ? text : `客廳電視：${text}`;
+
+  const response = await fetch("/api/assistant/ag-ui", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+    },
+    body: JSON.stringify({
+      threadId: "home",
+      runId,
+      state: {},
+      messages: [{ id: messageId, role: "user", content }],
+      tools: [],
+      context: [],
+      forwardedProps: {},
+    }),
+  });
+
+  if (!response.ok) {
+    let detail = "Main Agent 請求失敗";
+    try {
+      const err = await response.json();
+      if (typeof err?.detail === "string") detail = err.detail;
+    } catch {
+      // ignore non-json error body
+    }
+    throw new Error(detail);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    return "已送交 Main Agent 處理";
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let reply = "";
+  let runError = "";
+
+  const processChunk = (rawBlock: string) => {
+    const dataLines = rawBlock
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trim());
+    if (dataLines.length === 0) return;
+    const jsonText = dataLines.join("\n");
+    try {
+      const evt = JSON.parse(jsonText) as Record<string, unknown>;
+      const type = String(evt.type ?? "");
+      if (type === "CUSTOM" && evt.name === "assistant_progress") {
+        const val = evt.value as { text?: string } | undefined;
+        if (val?.text) onProgress(val.text);
+      } else if (type === "TEXT_MESSAGE_CONTENT" && typeof evt.delta === "string") {
+        reply += evt.delta;
+      } else if (type === "RUN_ERROR" && typeof evt.message === "string") {
+        runError = evt.message;
+      }
+    } catch {
+      // ignore heartbeat / non-json lines
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split(/\r?\n\r?\n/);
+    buffer = parts.pop() ?? "";
+    for (const part of parts) {
+      processChunk(part);
+    }
+  }
+  if (buffer.trim()) processChunk(buffer);
+
+  if (runError && !reply) {
+    throw new Error(runError);
+  }
+  return reply.trim() || "Main Agent 已完成電視指令。";
 }
 
 export default function TVControl({
   power,
   onPowerChange,
   tvState,
+  submit,
+  busy: externalBusy = false,
   onRefresh,
 }: TVControlProps) {
   const [volume, setVolume] = useState(25);
@@ -38,25 +128,39 @@ export default function TVControl({
   const [input, setInput] = useState<InputSource>("HDMI1");
   const [playback, setPlayback] = useState<Playback>("stopped");
   const [command, setCommand] = useState("");
+  const [localBusy, setLocalBusy] = useState(false);
   const [message, setMessage] = useState(
-    "你好！我是 TV Agent，可以幫你控制智慧電視。"
+    "你好！指令會經由 Main Agent 委派 TV Agent 執行並記錄操作日誌。",
   );
   const [history, setHistory] = useState<string[]>([]);
 
+  const busy = externalBusy || localBusy;
 
   const notify = (text: string) => {
     setMessage(text);
     setHistory((old) => [text, ...old].slice(0, 4));
   };
 
-  const syncToBackend = (payload: Record<string, unknown>) => {
+  const dispatchControl = (payload: Record<string, unknown>) => {
+    if (submit) {
+      submit("tv_control", { device_id: "tv-1", ...payload });
+      return;
+    }
     void fetch("/api/tv/control", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     })
-      .then(() => onRefresh?.())
-      .catch(() => {});
+      .then(async (res) => {
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(typeof data?.detail === "string" ? data.detail : "電視控制請求失敗");
+        }
+        onRefresh?.();
+      })
+      .catch((error: unknown) => {
+        notify(error instanceof Error ? error.message : "無法連線至電視控制服務");
+      });
   };
 
   useEffect(() => {
@@ -68,24 +172,31 @@ export default function TVControl({
     if (typeof tvState.playback === "string") setPlayback(tvState.playback);
   }, [tvState, onPowerChange]);
 
-const togglePower = () => {
-  if (power) {
-    onPowerChange(false);
-    setPlayback("stopped");
-    syncToBackend({ power: false, playback: "stopped" });
-    notify("電視已關閉，進入待機狀態。");
-  } else {
-    onPowerChange(true);
-    syncToBackend({ power: true });
-    notify("電視已開啟，歡迎回家！");
-  }
-};
+  const togglePower = () => {
+    if (power) {
+      onPowerChange(false);
+      setPlayback("stopped");
+      dispatchControl({ power: false, playback: "stopped" });
+      notify("電視已關閉，進入待機狀態。");
+    } else {
+      onPowerChange(true);
+      dispatchControl({ power: true });
+      notify("電視已開啟，歡迎回家！");
+    }
+  };
 
   const changeVolume = (value: number) => {
     const next = Math.max(0, Math.min(100, value));
     setVolume(next);
     setMuted(false);
-    syncToBackend({ volume: next, muted: false });
+    dispatchControl({ volume: next, muted: false });
+  };
+
+  const toggleMute = () => {
+    const next = !muted;
+    setMuted(next);
+    dispatchControl({ muted: next });
+    notify(next ? "已開啟靜音。" : "已解除靜音。");
   };
 
   const changeInput = (source: InputSource) => {
@@ -93,9 +204,8 @@ const togglePower = () => {
       notify("請先開啟電視，再切換訊號來源。");
       return;
     }
-
     setInput(source);
-    syncToBackend({ input: source });
+    dispatchControl({ input: source });
     notify(`已切換至 ${source}。`);
   };
 
@@ -104,9 +214,8 @@ const togglePower = () => {
       notify("請先開啟電視。");
       return;
     }
-
     setPlayback(value);
-    syncToBackend({ playback: value });
+    dispatchControl({ playback: value });
 
     const names = {
       playing: "開始播放",
@@ -117,107 +226,35 @@ const togglePower = () => {
     notify(names[value] + "。");
   };
 
-  const executeCommand = (event: FormEvent<HTMLFormElement>) => {
+  const executeCommand = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-
     const text = command.trim();
+    if (!text || busy) return;
 
-    if (!text) return;
-
-    const normalized = text.toLowerCase();
-    const numberMatch = normalized.match(/\d+/);
-    const number = numberMatch ? Number(numberMatch[0]) : null;
-
-    if (/關閉電視|關掉電視|電視關機|關機/.test(normalized)) {
-      onPowerChange(false);
-      setPlayback("stopped");
-      syncToBackend({ power: false, playback: "stopped" });
-      notify("AI 已執行：關閉電視。");
-    } else if (/打開電視|開啟電視|電視開機|開機/.test(normalized)) {
-      onPowerChange(true);
-      syncToBackend({ power: true });
-      notify("AI 已執行：開啟電視。");
-    } else if (/取消靜音|解除靜音/.test(normalized)) {
-      setMuted(false);
-      syncToBackend({ muted: false });
-      notify("AI 已執行：解除靜音。");
-    } else if (/靜音/.test(normalized)) {
-      setMuted(true);
-      syncToBackend({ muted: true });
-      notify("AI 已執行：開啟靜音。");
-    } else if (/音量/.test(normalized) && number !== null) {
-      if (number < 0 || number > 100) {
-        notify("音量範圍為 0～100。");
-      } else if (!power) {
-        notify("請先開啟電視，再調整音量。");
-      } else {
-        changeVolume(number);
-        notify(`AI 已將音量調整至 ${number}。`);
-      }
-    
-} else if (/hdmi/i.test(normalized) || /切換.*[1-4]/.test(normalized)) {
-  const match = normalized.match(/hdmi\s*([1-4])/i);
-
-  if (!match) {
-    notify("請指定 HDMI 1～4，例如：切換到 HDMI 2。");
-  } else {
-    changeInput(`HDMI${match[1]}` as InputSource);
-  }
-
-    } else if (/暫停/.test(normalized)) {
-      changePlayback("paused");
-    } else if (/播放|繼續/.test(normalized)) {
-      changePlayback("playing");
-    } else if (/停止/.test(normalized)) {
-      changePlayback("stopped");
-    } else {
-      notify("尚未辨識這個指令，請換個方式描述。");
-    }
-
+    setLocalBusy(true);
     setCommand("");
+    setMessage("正在透過 Main Agent 委派 TV Agent 處理…");
+    try {
+      const reply = await runViaMainAgent(text, (progress) => setMessage(progress));
+      notify(reply);
+      onRefresh?.();
+    } catch (error: unknown) {
+      notify(error instanceof Error ? error.message : "無法連線至 Main Agent");
+    } finally {
+      setLocalBusy(false);
+    }
   };
 
   return (
     <div className="tv-control">
-
-      {/* 電視設備資訊 */}
-      <div className="tv-device-status">
-        <div className="tv-device-icon">
-          <Tv size={25} />
-        </div>
-
-        <div className="tv-device-info">
-          <strong>LG Smart TV</strong>
-          <span>LG webOS 26 · Virtual Device</span>
-        </div>
-
-        <span className={`tv-status-badge ${power ? "on" : "off"}`}>
-          <span />
-          {power ? "運作中" : "待機中"}
+      {/* 狀態列 */}
+      <div className={`tv-status-strip ${power ? "is-on" : ""}`}>
+        <CheckCircle2 size={15} />
+        <span>
+          {power
+            ? `運作中 · ${input} · 音量 ${muted ? "靜音" : `${volume}%`}`
+            : "待機中 · 尚未開啟電視"}
         </span>
-      </div>
-
-      {/* 電視螢幕 */}
-      <div className={`tv-screen ${power ? "active" : ""}`}>
-        {power ? (
-          <>
-            <div className="tv-screen-brand">LG webOS</div>
-            <Monitor size={43} strokeWidth={1.2} />
-            <strong>智慧家庭娛樂中心</strong>
-            <span>{input} · {playback === "playing" ? "播放中" : playback === "paused" ? "已暫停" : "待播放"}</span>
-            <div className="tv-screen-apps">
-              <span>Netflix</span>
-              <span>YouTube</span>
-              <span>Disney+</span>
-            </div>
-          </>
-        ) : (
-          <>
-            <Tv size={45} strokeWidth={1.2} />
-            <strong>電視目前已關閉</strong>
-            <span>按下電源按鈕開啟電視</span>
-          </>
-        )}
       </div>
 
       {/* 電源 */}
@@ -225,17 +262,22 @@ const togglePower = () => {
         <div className="tv-section-title">
           <div>
             <span className="tv-eyebrow">POWER</span>
-            <h3>電源控制</h3>
+            <h3>電視電源</h3>
           </div>
-          <button
-            type="button"
-            className={`tv-power-button ${power ? "active" : ""}`}
-            onClick={togglePower}
-          >
-            <Power size={18} />
-            {power ? "關閉電視" : "開啟電視"}
-          </button>
+          <span className={`tv-badge ${power ? "is-on" : ""}`}>
+            {power ? "開啟" : "關閉"}
+          </span>
         </div>
+
+        <button
+          type="button"
+          disabled={busy}
+          className={`tv-power-button ${power ? "is-on" : ""}`}
+          onClick={togglePower}
+        >
+          <Power size={18} />
+          {power ? "關閉電視" : "開啟電視"}
+        </button>
       </section>
 
       {/* 音量 */}
@@ -253,9 +295,9 @@ const togglePower = () => {
         <div className="tv-volume-control">
           <button
             type="button"
-            disabled={!power}
+            disabled={!power || busy}
             aria-label="切換靜音"
-            onClick={() => setMuted(!muted)}
+            onClick={toggleMute}
           >
             {muted ? <VolumeX /> : <Volume2 />}
           </button>
@@ -265,14 +307,14 @@ const togglePower = () => {
             min="0"
             max="100"
             value={volume}
-            disabled={!power}
+            disabled={!power || busy}
             aria-label="電視音量"
             onChange={(event) => changeVolume(Number(event.target.value))}
           />
 
           <button
             type="button"
-            disabled={!power}
+            disabled={!power || busy}
             aria-label="增加音量"
             onClick={() => changeVolume(volume + 5)}
           >
@@ -303,15 +345,14 @@ const togglePower = () => {
               <button
                 key={source}
                 type="button"
-                disabled={!power}
+                disabled={!power || busy}
                 className={input === source ? "selected" : ""}
                 onClick={() => changeInput(source)}
               >
-                <Monitor size={17} />
+                <Monitor size={15} />
                 {source}
-                {input === source && <CheckCircle2 size={15} />}
               </button>
-            )
+            ),
           )}
         </div>
       </section>
@@ -335,7 +376,7 @@ const togglePower = () => {
         <div className="tv-playback-controls">
           <button
             type="button"
-            disabled={!power}
+            disabled={!power || busy}
             className={playback === "playing" ? "selected" : ""}
             onClick={() => changePlayback("playing")}
             aria-label="播放"
@@ -345,7 +386,7 @@ const togglePower = () => {
 
           <button
             type="button"
-            disabled={!power}
+            disabled={!power || busy}
             className={playback === "paused" ? "selected" : ""}
             onClick={() => changePlayback("paused")}
             aria-label="暫停"
@@ -355,7 +396,7 @@ const togglePower = () => {
 
           <button
             type="button"
-            disabled={!power}
+            disabled={!power || busy}
             className={playback === "stopped" ? "selected" : ""}
             onClick={() => changePlayback("stopped")}
             aria-label="停止"
@@ -373,9 +414,9 @@ const togglePower = () => {
           </div>
           <div>
             <strong>TV Agent</strong>
-            <span>SMART TV ASSISTANT</span>
+            <span>MAIN AGENT · MCP</span>
           </div>
-          <span className="tv-agent-online">LOCAL</span>
+          <span className="tv-agent-online">ONLINE</span>
         </div>
 
         <div className="tv-agent-message">
@@ -386,11 +427,12 @@ const togglePower = () => {
         <form className="tv-agent-form" onSubmit={executeCommand}>
           <input
             value={command}
+            disabled={busy}
             onChange={(event) => setCommand(event.target.value)}
-            placeholder="輸入指令，例如：音量調到 30"
+            placeholder="輸入指令，例如：音量調到 30 或太吵了"
             aria-label="輸入電視指令"
           />
-          <button type="submit" aria-label="送出指令">
+          <button type="submit" disabled={busy || !command.trim()} aria-label="送出指令">
             <Send size={18} />
           </button>
         </form>
@@ -401,11 +443,12 @@ const togglePower = () => {
               <button
                 type="button"
                 key={item}
+                disabled={busy}
                 onClick={() => setCommand(item)}
               >
                 {item}
               </button>
-            )
+            ),
           )}
         </div>
 
@@ -419,10 +462,14 @@ const togglePower = () => {
         )}
 
         <p className="tv-agent-note">
-          目前使用本機指令解析，尚未連接雲端 AI 或真實電視。
+          手動操作透過持久化請求佇列由 TVController 寫入操作日誌；自然語言指令經由 Main Agent 委派 TV Agent（MCP）執行。
         </p>
       </section>
 
+      <div className="tv-footer-note">
+        <Tv size={14} />
+        <span>LG Smart TV</span>
+      </div>
     </div>
   );
 }

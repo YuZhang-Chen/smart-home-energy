@@ -516,44 +516,6 @@ def is_explicit_curtain_only_request(text: str) -> bool:
     return True
 
 
-def run_tv_agent(repo, event, parent_id, root_id, text: str, monotonic=time.monotonic, progress=None):
-    """Execute a TV command via TV Agent and log durable diagnostics."""
-    from smart_home_energy import tv
-    started = monotonic()
-    run_id = uuid4().hex
-    provider = "deterministic-tv-agent"
-    status = "failed"
-    message = "電視指令未完成"
-    identifier = sha256(f"{root_id}:tv-1".encode()).hexdigest()
-
-    if progress:
-        progress("TV Agent 正在執行客廳電視控制指令")
-    try:
-        outcome = tv.execute_command(text)
-        status = "completed"
-        message = str(outcome["message"])
-        repo.log_tool(run_id, {
-            "protocol": "MCP", "mcp_method": "tools/call",
-            "role": "TV Agent", "provider": provider, "device_id": "tv-1",
-            "action": {"tool": "control_tv", "arguments": {"command": text}, "summary": "執行電視控制與狀態同步"},
-            "result": outcome["status"],
-        })
-    except ValueError as error:
-        message = str(error)
-        status = "needs_details"
-        repo.log_tool(run_id, {"role": "TV Agent", "provider": provider, "device_id": "tv-1", "error": message})
-
-    run = AgentRun(run_id, event.event_id, status, provider, 0, monotonic() - started, message, parent_id, "tv-1", "TV Agent")
-    repo.record_run(run)
-    result = encode(run)
-    with repo.transaction() as db:
-        db.execute(
-            "INSERT OR REPLACE INTO delegations VALUES (?,?,?,?,?)",
-            (identifier, root_id, "tv-1", None, json.dumps({"request_id": identifier, "result": result})),
-        )
-    return result
-
-
 async def run_household(repo, event, hems, providers=None, monotonic=time.monotonic, progress=None):
     run_id, started = uuid4().hex, monotonic()
     results, status, message = [], "failed", "家庭工作未完成，請使用各設備表單"
